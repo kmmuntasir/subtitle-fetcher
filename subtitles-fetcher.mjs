@@ -279,6 +279,9 @@ export function cleanShowName(rawSeg) {
   }
   t = t.replace(/\s*[-–—]+\s*$/, "").replace(/^(?:19|20)\d{2}\s*/, "").replace(/\s+/g, " ").trim();
   t = t.replace(/\s*\((?:part|season|vol)\s*[^)]*\)$/i, "").trim();
+  // trailing lone season token ("3 Body Problem S01") when it leaves ≥2 words
+  const beforeSeason = t.replace(/\s+\bS\d{1,2}\b.*$/i, "").trim();
+  if (beforeSeason.split(/\s+/).length >= 2 && !/^s\d/i.test(t)) t = beforeSeason;
   return t.trim();
 }
 
@@ -311,9 +314,11 @@ export function guessMeta(videoPath) {
   const underMovies = segs.some(s => /^movies$/i.test(s));
 
   // ---- episode patterns -----------------------------------------------
-  let m = /\bs(\d{1,2})[\s._-]{0,3}e(\d{1,4})\b/i.exec(fname)
-       || /\bs(\d{1,2})[\s._-]{0,3}e(\d{1,4})\b/i.exec(parentDir);
-  if (!m) m = /\b(\d{1,2})x(\d{1,3})\b/.exec(fname);
+  // NOTE: '\b' fails around S01E01 when separated by UNDERSCORES ('_S01'), so
+  // anchor on any non-alphanumeric instead.
+  let m = /(?:^|[^a-z0-9])s(\d{1,2})[\s._-]{0,3}e(\d{1,4})(?!\d)/i.exec(fname)
+       || /(?:^|[^a-z0-9])s(\d{1,2})[\s._-]{0,3}e(\d{1,4})(?!\d)/i.exec(parentDir);
+  if (!m) m = /(?:^|[^a-z0-9])(\d{1,2})x(\d{1,3})(?!\d)/i.exec(fname);
   if (!m && underTv) {
     // season hint: "Season 02" in any nearby segment, or leading S01 in folder names
     let seasonHint = null;
