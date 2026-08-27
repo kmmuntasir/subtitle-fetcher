@@ -1,0 +1,8 @@
+# personal state — never commit
+config.json
+state.json
+logs/
+cache/
+run-daily.cmd
+*.log
+node_modules/
