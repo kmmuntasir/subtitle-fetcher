@@ -3,6 +3,8 @@
  * Subtitle Fetcher — scans movie/TV libraries, downloads English sidecar subtitles.
  *
  * Free pipeline (tried in configured order):
+ *   a7   — addic7ed.com               (anonymous, TV specialist, throttled → paced
+ *          globally; unique searches 302 straight to the episode page)
  *   sd   — subdl.com                  (anonymous, ~300 downloads/day per IP;
  *          scrapes search → detail pages → direct dl.subdl.com zips)
  *   os   — opensubtitles.com REST API (free account + free personal API key;
@@ -53,7 +55,8 @@ const DEFAULT_CONFIG = {
   username: "",      // free opensubtitles.com account (raises download quota massively)
   password: "",
 
-  providers: ["sd", "os"],     // tried in this order; sd=subdl.com (anonymous), os=opensubtitles.com
+  providers: ["a7", "sd", "os"],  // order tried per video; a7 addic7ed.com auto-skips movies,
+                                  // so effectively TV-first with SubDL as workhorse fallback
   maxPerRun: null,
   hearingImpairedOk: true,
   aiTranslatedOk: false,
@@ -743,6 +746,105 @@ class YtsProvider {
   }
 }
 
+/* ---- 4b. addic7ed.com -------------------------------------------------------
+ * Community-maintained TV subtitles. Anonymous downloads work but the site
+ * throttles aggressively — we pace requests globally and back off when told.
+ * Markup verified live 2026-08; the classic scrapers broke on the button HTML,
+ * this parses current structure directly (language cell → /original/S/E link). */
+
+const A7_URL = "https://www.addic7ed.com";
+const A7_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+let _a7last = 0;
+async function a7Pace(gapMs = 3200) {
+  const wait = _a7last + gapMs - Date.now();
+  if (wait > 0) await sleep(wait);
+  _a7last = Date.now();
+}
+
+export class Addic7edProvider {
+  constructor(cfg) { this.id = "a7"; this.enabled = true; this.cfg = cfg; }
+
+  async search(_ctx, meta) {
+    if (meta.kind !== "episode") return [];                       // TV specialist
+    const ss = String(meta.season).padStart(2, "0");
+    const ee = String(meta.episode).padStart(2, "0");
+    await a7Pace();
+    const res = await http(`${A7_URL}/srch.php?search=${encodeURIComponent(`${meta.show} S${ss}E${ee}`)}&Submit=Search`,
+      { headers: { "User-Agent": A7_UA }, timeoutMs: 25000, redirect: "manual" });
+
+    let linkPath = null;
+    if ([301, 302, 303, 307, 308].includes(res.status)) {
+      // unique match: site redirects straight to the episode page
+      const loc = String(res.headers.get("location") ?? "").replace(/^https?:\/\/[^/]+/, "");
+      if (!/^\/?serie\/[^/]+\/\d+\/\d+\/?/i.test(loc))
+        throw new Error(`a7: unexpected redirect ${loc || "(none)"}`);
+      linkPath = loc.replace(/^\//, "");
+    } else {
+      if (!res.ok) throw new Error(`a7 search ${res.status}`);
+      const html = await res.text();
+      if (/<b>0 results found<\/b>/i.test(html)) return [];
+      const linkRx = new RegExp(`href="(serie\\/[^"']+\\/${meta.season}\\/${meta.episode}\\/[^"]*)"`, "i");
+      linkPath = linkRx.exec(html)?.[1];
+      if (!linkPath) {
+        const n = /<b>(\d+) results found<\/b>/i.exec(html)?.[1];
+        throw new Error(`a7: no exact serie link (search said '${n ?? "?"}' results)`);
+      }
+    }
+    const pageRes = await http(`${A7_URL}/${linkPath}`, { headers: { "User-Agent": A7_UA }, timeoutMs: 30000 });
+    if (!pageRes.ok) throw new Error(`a7 page ${pageRes.status}`);
+    const pageHtml = await pageRes.text();
+
+    // Each language cell owns its status cell and download anchor directly after it.
+    // "Completed" rows are trusted; rows showing "<b>NN%</b>" are skipped.
+    const out = [];
+    for (const seg of pageHtml.split(/class="language">/i).slice(1)) {
+      const lang = /^[\s]*([\w ()&'-]{3,30}?)\s*<(?:a\b|\/td)/i.exec(seg)?.[1]?.trim() ?? "?";
+      if (!/^english$/i.test(lang)) continue;
+      const statusCell = seg.slice(0, 700);
+      const incomplete = /\b\d{1,3}\s*%(?:\s|<)/i.test(statusCell);
+      if (incomplete && !/<b>\s*Completed\s*<\/b>/i.test(statusCell)) continue;
+      const href = /href="(\/original\/\d+\/\d+)"/i.exec(seg)?.[1];
+      if (!href) continue;
+      // nearest "Version …," header above this anchor tells us the release + HI flag
+      const anchorPos = pageHtml.lastIndexOf(`href="${href}"`);
+      const before = pageHtml.slice(Math.max(0, anchorPos - 3000), anchorPos);
+      const heads = [...before.matchAll(/Version [^,<]{3,80},/gi)];
+      const headText = heads.length ? heads[heads.length - 1][0] : "";
+      out.push({
+        href,
+        hi: /hearing impaired/i.test(headText),
+        team: headText.replace(/^Version\s+/i, "").replace(/,\s*$/, "").trim().slice(0, 60),
+        referer: "/" + linkPath,
+        score: /hearing impaired/i.test(headText) ? 6 : 10,
+      });
+    }
+    return out.slice(0, 3);
+  }
+
+  async fetchCandidate(_ctx, cand) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await a7Pace();
+      const res = await http(`${A7_URL}${cand.href}`, {
+        headers: { "User-Agent": A7_UA, Referer: A7_URL + cand.referer },
+        timeoutMs: 45000,
+      });
+      const buf = Buffer.from(await res.arrayBuffer());
+      const head = buf.subarray(0, 600).toString("latin1");
+      const throttled = res.status === 429 || /too many requests|please wait|try again in \d+ seconds/i.test(head);
+      if (throttled && attempt === 0) { log(DIM("   a7: throttled, cooling down 25s…")); await sleep(25000); continue; }
+      if (throttled) throw Object.assign(new Error("throttled twice"), { quotaExhausted: true, providerId: "a7" });
+
+      const text = buf.toString("utf8").replace(/^﻿/, "");
+      if ((text.match(/-->/g) ?? []).length >= 2) {
+        cand.pickedRelease = cand.team ? `addic7ed ${cand.team}${cand.hi ? " (HI)" : ""}` : `addic7ed ${cand.href}`;
+        return text;
+      }
+      throw new Error(`not-srt (${res.status}, ${head.slice(30, 90)})`);
+    }
+    throw new Error("unreachable");
+  }
+}
+
 /* ---- 5. subdl.com ----------------------------------------------------------
  * Anonymous site scraping: search → subtitle detail pages carry per-language
  * sections; every release row links a direct dl.subdl.com zip.
@@ -845,7 +947,7 @@ export class SubDlProvider {
   }
 }
 
-const PROVIDER_CLASSES = { os: OpenSubtitlesProvider, sd: SubDlProvider, pn: PodnapisiProvider, gd: GestdownProvider, yts: YtsProvider };
+const PROVIDER_CLASSES = { os: OpenSubtitlesProvider, a7: Addic7edProvider, sd: SubDlProvider, pn: PodnapisiProvider, gd: GestdownProvider, yts: YtsProvider };
 
 // ---------------------------------------------------------------------------
 // Scan + classification
@@ -981,6 +1083,8 @@ async function cmdDry(cfg, argv) {
 async function cmdRun(cfg, argv) {
   const limIdx = argv.indexOf("--limit");
   const limit = limIdx >= 0 ? +argv[limIdx + 1] || null : cfg.maxPerRun;
+  const onlyIdx = argv.indexOf("--only");
+  const onlySub = onlyIdx >= 0 ? String(argv[onlyIdx + 1] ?? "").toLowerCase() : "";
   openLog("run");
   const started = Date.now();
   const forceScan = argv.includes("--rescan") || argv.includes("--no-skip-refresh");
@@ -996,6 +1100,7 @@ async function cmdRun(cfg, argv) {
 
   let entries = Object.entries(state.files)
     .filter(([, r]) => r.status === "pending" || r.status === "failed")
+    .filter(([k]) => !onlySub || k.includes(onlySub))
     .map(([k, r]) => ({ k, ...r }));
 
   if (argv.includes("--oldest-last")) entries.reverse();  // undocumented convenience
@@ -1160,16 +1265,18 @@ async function cmdStatus() {
 
 async function cmdRetry(cfg, substr) {
   if (!substr) { console.log("usage: retry <substring-of-path>"); return; }
+  const needle = substr.toLowerCase();
   const state = loadState();
   let hits = 0;
   for (const [k, rec] of Object.entries(state.files)) {
-    if (k.includes(substr.toLowerCase()) && ["failed", "parked", "done"].includes(rec.status)) {
-      rec.status = "pending"; rec.attempts = 0; hits++;
-    }
+    if (!k.includes(needle)) continue;
+    if (["failed", "parked"].includes(rec.status)) { rec.status = "pending"; rec.attempts = 0; }
+    if (rec.status === "done") { /* force re-fetch: remove sidecar check happens next scan */ rec.status = "pending"; rec.attempts = 0; }
+    if (rec.status === "pending") hits++;
   }
   saveState(state);
-  console.log(`reset ${hits} entries to pending; running limited pass…`);
-  await cmdRun(cfg, ["--limit", String(hits || 1)]);
+  console.log(`${hits} matching entries queued for '${substr}'…`);
+  await cmdRun(cfg, ["--limit", String(hits || 1), "--only", needle]);
 }
 
 async function cmdProbe(cfg, target) {

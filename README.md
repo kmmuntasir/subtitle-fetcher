@@ -8,7 +8,9 @@ Zero npm dependencies · Node ≥ 18 · Windows / Linux / macOS.
 
 ## Features
 
-- **Two free sources, no accounts required to start**
+- **Three free sources, no accounts required to start**
+  - [addic7ed.com](https://www.addic7ed.com) — TV specialist; anonymous; requests are globally
+    paced so its throttling never trips; effectively the primary source for episodes
   - [subdl.com](https://subdl.com) — anonymous, community-reported cap ≈ 300 downloads/day per IP
   - [opensubtitles.com](https://www.opensubtitles.com) API — optional free key; hash-exact sync fallback
 - **Respects daily caps automatically** — stops politely mid-run, resumes tomorrow, queue preserved
@@ -89,11 +91,16 @@ state.json            machine-readable ledger across days
 
 ## Notes on sources
 
+- addic7ed works anonymously today: searches with a single matching show redirect (302)
+  directly to that episode page; multi-match pages return a result list. The adapter
+  handles both. Downloads require a `Referer` header from the same page — all handled
+  internally. If you hammer it faster than humans do, it will throttle; the built-in
+  global pacing (~3 s between hits) avoids that, and cooldowns are respected.
 - subdl zips are fetched anonymously; when their per-IP daily allowance runs out the app
-  notices (`403/429` patterns) and switches providers or pauses until tomorrow.
+  notices and switches providers or pauses until tomorrow.
 - opensubtitles needs a free personal API key (dashboard.opensubtitles.com);
   attaching your account login raises the anonymous allowance considerably.
-- A few community keyless sites are commonly ISP-blocked in some regions
+- Several community keyless sites are commonly ISP-blocked in some regions
   (podnapisi/gestdown/yts mirrors). Adapters exist but stay off unless reachable.
 
 Intended for use with media you legitimately possess; respect each provider's terms.
