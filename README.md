@@ -4,7 +4,30 @@ Scans your **movie / TV-series library** (local disk, NAS mount, Windows UNC sha
 downloads English sidecar subtitles (`<name>.en.srt`) for every video that is missing them.
 Then keeps doing it daily until the whole library is covered.
 
-Zero npm dependencies · Node ≥ 18 · Windows / Linux / macOS.
+Zero npm dependencies · Node ≥ 20 · Windows / Linux / macOS.
+
+## 🆕 v2: LAN web service
+
+Run it as a always-on service with a browser dashboard — next to Jellyfin (:8096)
+and qBittorrent (:8090), on its own port (**8097**):
+
+```bash
+git clone https://github.com/kmmuntasir/subtitle-fetcher.git
+cd subtitle-fetcher
+node install.mjs            # registers boot service + prints your LAN URL
+```
+
+- Dashboard: live activity feed, provider/quota status, run controls
+- Folders: pick movie/TV folders via server-side browser
+- Queue: filter, retry, park; Library: browse shows→episodes, movies
+- **Re-search**: for any title, list alternative subtitles from all providers and swap
+- Reports: downloads/day, provider share; logs viewer
+- Daily scheduler built into the service (catches up after power-off)
+
+Full plan & architecture: [docs/plan-web-service.md](docs/plan-web-service.md).
+Prefer the plain CLI? Everything below still works exactly as before.
+
+
 
 ## Features
 

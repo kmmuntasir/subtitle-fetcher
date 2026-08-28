@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subtitle Fetcher</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="engineDot"></span> Subtitle Fetcher <span id="enginePhase" class="phase"></span></div>
+  <nav>
+    <a href="#/dashboard" data-tab>Dashboard</a>
+    <a href="#/folders" data-tab>Folders</a>
+    <a href="#/queue" data-tab>Queue</a>
+    <a href="#/library" data-tab>Library</a>
+    <a href="#/logs" data-tab>Logs</a>
+    <a href="#/settings" data-tab>Settings</a>
+  </nav>
+  <div class="actions">
+    <button id="btnScan" class="ghost">Scan</button>
+    <button id="btnRun" class="primary">Fetch now</button>
+    <button id="btnStop" class="danger" hidden>Stop</button>
+  </div>
+</header>
+
+<main>
+  <section id="tab-dashboard" class="tab">
+    <div class="tiles" id="tiles"></div>
+    <div class="cols">
+      <div class="card">
+        <h3>Providers</h3>
+        <div id="providers" class="pills"></div>
+        <h3>Last run</h3>
+        <div id="lastRun" class="muted">—</div>
+      </div>
+      <div class="card grow">
+        <h3>Live activity</h3>
+        <div id="feed" class="feed"><div class="muted">waiting for events…</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-folders" class="tab" hidden>
+    <div class="card">
+      <h3>Configured folders</h3>
+      <div id="rootList" class="rootlist"></div>
+      <div class="row">
+        <button id="btnBrowse" class="primary">Browse server…</button>
+        <input id="manualPath" placeholder="…or type a path (/mnt/media/Movies)">
+        <select id="rootType"><option value="movie">Movies</option><option value="tv" selected>TV shows</option><option value="auto">Auto-detect</option></select>
+        <button id="btnAddRoot">Add</button>
+      </div>
+      <div id="browser" hidden>
+        <div class="crumbs" id="crumbs"></div>
+        <div id="dirList" class="dirlist"></div>
+        <div class="row"><span id="pickLabel" class="muted"></span><button id="btnPick" class="primary" disabled>Pick this folder</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-queue" class="tab" hidden>
+    <div class="card">
+      <div class="row wrap">
+        <select id="qStatus"><option value="">any status</option><option value="pending">pending</option><option value="failed">failed</option><option value="parked">parked</option><option value="done">done</option><option value="covered">covered</option></select>
+        <select id="qType"><option value="">movies + tv</option><option value="movie">movies</option><option value="episode">episodes</option></select>
+        <input id="qSearch" placeholder="path contains…">
+        <button id="btnQGo" class="primary">Filter</button>
+        <span class="muted" id="qCount"></span>
+      </div>
+      <table class="grid" id="qTable"><thead><tr><th>status</th><th>item</th><th>info</th><th>attempts</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="row"><button id="qPrev">← prev</button><button id="qNext">next →</button></div>
+    </div>
+  </section>
+
+  <section id="tab-library" class="tab" hidden>
+    <div class="row"><h3 id="libTitle">TV shows</h3><button id="libToggle" class="ghost">switch to movies</button></div>
+    <div id="libShows" class="shows"></div>
+    <div id="libMovies" hidden><table class="grid"><thead><tr><th>title</th><th>year</th><th>status</th><th>release</th></tr></thead><tbody id="libMovieRows"></tbody></table></div>
+  </section>
+
+  <section id="tab-logs" class="tab" hidden>
+    <div class="card">
+      <div class="row"><select id="logFile"></select><button id="btnLogGo" class="primary">Load</button><label class="muted"><input type="checkbox" id="logFollow" checked> follow</label></div>
+      <pre id="logView" class="logview"></pre>
+    </div>
+  </section>
+
+  <section id="tab-settings" class="tab" hidden>
+    <div class="card">
+      <h3>Fetch behavior</h3>
+      <div class="formrow"><label>Provider order (comma separated: a7,sd,os)</label><input id="sProviders"></div>
+      <div class="formrow"><label>Accept hearing-impaired</label><input type="checkbox" id="sHI"></div>
+      <div class="formrow"><label>Accept AI-translated</label><input type="checkbox" id="sAI"></div>
+      <div class="formrow"><label>Attempts before park</label><input id="sPark" type="number" min="1" max="10"></div>
+      <h3>Schedule</h3>
+      <div class="formrow"><label>Daily run enabled</label><input type="checkbox" id="sSchedOn"></div>
+      <div class="formrow"><label>Time (HH:MM)</label><input id="sSchedTime" placeholder="13:05"></div>
+      <h3>OpenSubtitles (optional)</h3>
+      <div class="formrow"><label>API key</label><input id="sOsKey"></div>
+      <div class="formrow"><label>Username</label><input id="sOsUser"></div>
+      <div class="formrow"><label>Password</label><input id="sOsPass" type="password"></div>
+      <div class="row"><button id="btnSaveSettings" class="primary">Save settings</button><span id="saveMsg" class="muted"></span></div>
+    </div>
+  </section>
+</main>
+
+<div id="modal" hidden><div class="modalbox"><div id="modalBody"></div><button id="modalClose" class="ghost">close</button></div></div>
+<script src="app.js"></script>
+</body>
+</html>
