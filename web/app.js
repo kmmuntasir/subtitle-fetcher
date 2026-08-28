@@ -47,9 +47,9 @@ async function loadDashboard() {
 
   const t = st.totals;
   $("#tiles").innerHTML = [
-    tile(t.total, "videos", ""), tile(t.covered, "have EN subs", "ok"),
-    tile(t.pending, "pending", "warn"), tile(t.failed, "failed", "bad"), tile(t.parked, "parked", ""),
-    tile(st.sdDownloadsToday, "subdl today", "warn"),
+    tile(t.total, "Videos", ""), tile(t.covered, "Subtitled", "ok"),
+    tile(t.pending, "Pending", "warn"), tile(t.failed, "Failed", "bad"), tile(t.parked, "Parked", ""),
+    tile(st.sdDownloadsToday, "SubDL today", "warn"),
   ].join("");
 
   $("#providers").innerHTML = st.providers.map(p =>
@@ -114,18 +114,24 @@ try {
 } catch { /* SSE optional */ }
 
 function esc(s) { return String(s ?? "").replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
+const STATUS_LABEL = { done: "Done", covered: "Covered", pending: "Pending", failed: "Failed", parked: "Parked" };
+const fmtStatus = (s) => STATUS_LABEL[s] ?? s;
+const chip = (s) => `<span class="st ${s}">${fmtStatus(s)}</span>`;
+const fmtOutcome = (o) => ({ kept: "Kept", replaced: "Replaced", rejected: "Rejected" }[o] ?? o ?? "");
+const field = (label, value) => value ? `<div class="f"><span>${label}</span><b>${value}</b></div>` : "";
 function renderEvent(e) {
   const t = (e.t ?? new Date().toISOString()).slice(11, 19);
   if (e.line) return `<span class="miss">${esc(t)} ${esc(e.line)}</span>`;
   switch (e.ev) {
-    case "item_start": return `${esc(t)} → searching ${esc(e.label ?? e.key)}`;
-    case "download": return `<span class="dl">${esc(t)} ✔ ${esc(e.label)} <b>${esc(e.provider)}</b> «${esc(e.release)}»${e.hi ? " [HI]" : ""}${e.ai ? " [AI]" : ""}</span>`;
-    case "miss": return `<span class="miss">${esc(t)} ✖ ${esc(e.label)} — ${esc(e.reason ?? "")}</span>`;
-    case "quota": return `<span class="warn2">${esc(t)} ⛔ quota: ${esc(e.provider ?? e.detail ?? "")}</span>`;
-    case "replace": return `<span class="dl">${esc(t)} ⇄ swapped ${esc(e.key.split("/").pop())} → ${esc(e.release)}</span>`;
-    case "scan": return `<span class="warn2">${esc(t)} ⚙ scan: ${e.total ?? "?"} videos, ${e.pending ?? "?"} pending</span>`;
-    case "run_start": return `<span class="warn2">${esc(t)} ▶ run started (${e.queue} queued)</span>`;
-    case "run_end": return `<span class="warn2">${esc(t)} ■ run finished: ${e.done} down, ${e.missed} missed</span>`;
+    case "item_start": return `${esc(t)} Searching — ${esc(e.label ?? e.key)}`;
+    case "download": return `<span class="dl">${esc(t)} Downloaded — ${esc(e.label)} · ${esc(e.provider)} · ${esc(e.release ?? "")}${e.hi ? " · Hearing impaired" : ""}${e.ai ? " · AI translated" : ""}</span>`;
+    case "miss": return `<span class="miss">${esc(t)} No match — ${esc(e.label)}${e.reason ? ` (${esc(e.reason)})` : ""}</span>`;
+    case "quota": return `<span class="warn2">${esc(t)} Quota reached — ${esc(e.provider ?? e.detail ?? "")}</span>`;
+    case "replace": return `<span class="dl">${esc(t)} Subtitle replaced — ${esc(e.key.split("/").pop())} → ${esc(e.release)}</span>`;
+    case "priority": return `<span class="warn2">${esc(t)} Priority requested — ${esc(e.key.split("/").pop())}</span>`;
+    case "scan": return `<span class="warn2">${esc(t)} Scan complete — ${e.total ?? "?"} videos, ${e.pending ?? "?"} pending</span>`;
+    case "run_start": return `<span class="warn2">${esc(t)} Run started — ${e.queue} items queued</span>`;
+    case "run_end": return `<span class="warn2">${esc(t)} Run finished — ${e.done} downloaded, ${e.missed} unmatched</span>`;
     case "log": return esc(t) + " " + esc(e.line ?? "");
     default: return esc(t) + " " + esc(JSON.stringify(e).slice(0, 160));
   }
@@ -206,7 +212,7 @@ async function loadQueue() {
   const d = await api("queue?" + sp);
   $("#qCount").textContent = `${d.total} items`;
   $("#qTable tbody").innerHTML = d.items.map(it => `<tr>
-    <td><span class="st ${it.status}">${it.status}</span></td>
+    <td>${chip(it.status)}</td>
     <td class="path">${esc(it.key.split("/").slice(-2).join("/"))}</td>
     <td class="path">${esc(it.rel ?? it.lastError ?? "")}</td>
     <td>${it.attempts ?? 0}</td>
@@ -215,25 +221,39 @@ async function loadQueue() {
   $$("#qTable .qitem").forEach(b => b.onclick = () => itemModal(b.dataset.k));
 }
 
-async function itemModal(key) {
+async function itemModal(key, backShow = null) {
   const it = await api("items/" + encodeURIComponent(key));
   $("#modal").hidden = false;
+  const kind = it.meta?.kind === "episode" ? "tv" : "movie";
   $("#modalBody").innerHTML = `
-    <h3>${esc(it.key.split("/").pop())}</h3>
-    <p class="path">${esc(it.key)}</p>
-    <p><span class="st ${it.status}">${it.status}</span> attempts: ${it.attempts ?? 0}
-       ${it.provider ? `· provider <b>${esc(it.provider)}</b>` : ""} ${it.rel ? `· «${esc(it.rel)}»` : ""}</p>
-    ${it.lastError ? `<p class="muted">last error: ${esc(it.lastError)}</p>` : ""}
-    <div class="row">
-      <button id="mRetry" class="primary">Re-queue</button>
-      <button id="mPrio" class="primary">${icon("zap")} Fetch now (priority)</button>
-      <button id="mPark" class="ghost">${it.status === "parked" ? "Un-park" : "Park"}</button>
-      <button id="mAlts">${icon("search")} Find alternatives…</button>
+    ${backShow ? `<button id="mBackShow" class="ghost" style="margin-bottom:8px">← ${esc(backShow)}</button>` : ""}
+    <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+      ${artImg(it.key, it.meta?.title ?? it.meta?.show ?? "", "thumb")}
+      <div style="flex:1;min-width:260px">
+        <h3 style="margin:0 0 4px">${esc(it.meta?.title ?? it.meta?.show ?? it.key.split("/").pop())}</h3>
+        <p class="path" style="margin:0 0 10px">${esc(it.key)}</p>
+        <div class="fields">
+          ${field("Status", chip(it.status))}
+          ${field("Attempts", String(it.attempts ?? 0))}
+          ${field("Source", it.provider ? esc(it.provider) : "")}
+          ${field("Release", it.rel ? esc(it.rel) : "")}
+          ${field("Downloaded", it.when ? esc(it.when.slice(0, 16).replace("T", " ")) : "")}
+          ${field("Flags", [it.hi ? "Hearing impaired" : "", it.ai ? "AI translated" : ""].filter(Boolean).join(", "))}
+          ${field("Last error", it.lastError ? esc(it.lastError) : "")}
+        </div>
+      </div>
     </div>
-    ${it.history?.length ? `<div class="hist"><b style="font-size:12px">history</b>${it.history.slice().reverse().map(h =>
-      `<div>${esc(h.at?.slice(0, 16).replace("T", " ") ?? "")} · ${esc(h.provider ?? "?")} · «${esc(h.release ?? "?")}» · ${esc(h.outcome ?? "")}</div>`).join("")}</div>` : ""}
+    <div class="row">
+      <button id="mRetry" class="primary">Requeue</button>
+      <button id="mPrio" class="primary">${icon("zap")} Fetch Now · Priority</button>
+      <button id="mAlts">${icon("search")} Find Alternatives</button>
+      <button id="mPark" class="ghost">${it.status === "parked" ? "Unpark" : "Park"}</button>
+    </div>
+    ${it.history?.length ? `<div class="hist"><b style="font-size:12px">History</b>${it.history.slice().reverse().map(h =>
+      `<div>${esc(h.at?.slice(0, 16).replace("T", " ") ?? "")} · ${esc(h.provider ?? "?")} · ${esc(h.release ?? "?")} · ${fmtOutcome(h.outcome)}</div>`).join("")}</div>` : ""}
     <div id="alts"></div>`;
   $("#modalClose").onclick = () => $("#modal").hidden = true;
+  if (backShow) $("#mBackShow").onclick = () => showModal(backShow);
   $("#mPrio").onclick = async () => {
     const r = await post(`items/${encodeURIComponent(key)}/priority`);
     $("#mPrio").disabled = true;
@@ -312,35 +332,56 @@ async function renderLibrary() {
   if (!libData.tv.length) libData.tv = (await api("library?type=tv")).tv;
   const list = q ? libData.tv.filter(s => s.show.toLowerCase().includes(q)) : libData.tv;
   $("#libMovies").hidden = true; $("#libShows").hidden = false;
+  $("#libShows").className = "cards";
   $("#libShows").innerHTML = list.slice(0, 400).map(sh => {
     const pct = sh.total ? Math.round(100 * sh.covered / sh.total) : 0;
     const anyKey = sh.seasons[0]?.episodes[0]?.key ?? "";
-    return `<details class="show"><summary class="showhead">
-        ${artImg(anyKey, sh.show)}
-        <span style="flex:1"><b>${icon("tv")} ${esc(sh.show)}</b>
-        <span class="bar"><i style="width:${pct}%"></i></span> ${sh.covered}/${sh.total} (${pct}%)</span>
-        <button class="ghost prio-show" data-show="${esc(sh.show)}">${icon("zap")} fetch missing</button>
-      </summary>
-      ${sh.seasons.map(se => `<div class="eps"><div class="muted" style="margin:6px 0 2px">Season ${se.season}</div>` +
-        se.episodes.map(ep => `<span class="ep ${ep.status === "done" || ep.status === "covered" ? "ok" : ""}"
-          data-k="${esc(ep.key)}" title="${esc(ep.rel ?? ep.status)}">E${String(ep.episode).padStart(2, "0")} ${ep.status === "done" || ep.status === "covered" ? "✓" : "✗"}</span>`).join("") + `</div>`).join("")}
-    </details>`;
-  }).join("");
-  bindCardClicks();
-  $$("#libShows .prio-show").forEach(b => b.onclick = async (e) => {
-    e.preventDefault(); e.stopPropagation();
-    const show = b.dataset.show;
-    const sh = libData.tv.find(x => x.show === show);
-    b.disabled = true;
+    return `<div class="pcard" data-show="${esc(sh.show)}" data-k="${esc(anyKey)}">
+      ${artImg(anyKey, sh.show)}
+      <div class="meta"><div class="t">${icon("tv")} ${esc(sh.show)}</div>
+        <div class="y"><span class="bar" style="display:inline-block;width:52px;height:5px;background:var(--panel2);border-radius:3px;vertical-align:middle"><i style="display:block;height:100%;width:${pct}%;background:var(--ok);border-radius:3px"></i></span> ${sh.covered}/${sh.total}</div></div>
+    </div>`;
+  }).join("") + (list.length > 400 ? `<div class="muted">…${list.length - 400} more — refine search</div>` : "");
+  $$("#libShows .pcard").forEach(c => c.onclick = () => showModal(c.dataset.show));
+}
+
+function showModal(showName) {
+  const sh = libData.tv.find(x => x.show === showName);
+  if (!sh) return;
+  const pct = sh.total ? Math.round(100 * sh.covered / sh.total) : 0;
+  const anyKey = sh.seasons[0]?.episodes[0]?.key ?? "";
+  $("#modal").hidden = false;
+  $("#modalBody").innerHTML = `
+    <div style="display:flex;gap:16px;align-items:flex-start">
+      ${artImg(anyKey, sh.show, "thumb")}
+      <div style="flex:1">
+        <h3 style="margin:0 0 6px">${icon("tv")} ${esc(sh.show)}</h3>
+        <p class="muted" style="margin:0 0 4px"><span class="bar" style="display:inline-block;width:120px;height:6px;background:var(--panel2);border-radius:3px;vertical-align:middle"><i style="display:block;height:100%;width:${pct}%;background:var(--ok);border-radius:3px"></i></span> ${sh.covered}/${sh.total} episodes subtitled (${pct}%)</p>
+        <div class="row">
+          <button id="mPrioShow" class="primary">${icon("zap")} Fetch missing (priority)</button>
+          <button id="mBack" class="ghost">← Back to Library</button>
+        </div>
+      </div>
+    </div>
+    ${sh.seasons.map(se => `<div class="eps"><div class="muted" style="margin:10px 0 4px">Season ${se.season}</div>` +
+      se.episodes.map(ep => `<span class="ep ${ep.status === "done" || ep.status === "covered" ? "ok" : ""}"
+        data-k="${esc(ep.key)}" title="${esc(ep.rel ?? ep.status)}">E${String(ep.episode).padStart(2, "0")} ${ep.status === "done" || ep.status === "covered" ? "✓" : "✗"}</span>`).join("") + `</div>`).join("")}
+    <div class="muted" style="margin-top:8px">Click an episode for details, alternatives and subtitle swapping.</div>`;
+  $("#modalClose").onclick = () => $("#modal").hidden = true;
+  $("#mBack").onclick = () => $("#modal").hidden = true;
+  $("#mPrioShow").onclick = async (e) => {
+    e.target.disabled = true;
     let n = 0;
     for (const se of sh.seasons) for (const ep of se.episodes)
       if (ep.status !== "done" && ep.status !== "covered") { await post(`items/${encodeURIComponent(ep.key)}/priority`); n++; }
-    toast(`⏩ ${n} episodes queued with priority`);
-  });
+    e.target.textContent = `⏩ ${n} episodes queued`;
+    libData.tv = [];                       // refresh coverage next render
+  };
+  $$("#modalBody .ep").forEach(el => el.onclick = () => itemModal(el.dataset.k, showName));
 }
+
 function bindCardClicks() {
-  $$(".pcard").forEach(c => c.onclick = () => itemModal(c.dataset.k));
-  $$("#libShows .ep").forEach(el => el.onclick = () => itemModal(el.dataset.k));
+  $$("#libMovies .pcard").forEach(c => c.onclick = () => itemModal(c.dataset.k));
 }
 
 // ---- logs --------------------------------------------------------------------------
