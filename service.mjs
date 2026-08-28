@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, saveConfig, normalizeRoots } from "./lib/config.mjs";
 import { loadState, saveState, summary, initActivity, pushActivity, getActivity } from "./lib/store.mjs";
 import { openLog, closeLog, setLogHook, GRN, YEL, DIM } from "./lib/logger.mjs";
-import { refreshInventory } from "./lib/scanner.mjs";
+import { refreshInventory, refreshInventoryAsync } from "./lib/scanner.mjs";
 import { guessMeta } from "./lib/parse.mjs";
 import { openSubtitlesHash } from "./lib/hash.mjs";
 import { runFetch } from "./lib/engine.mjs";
@@ -52,14 +52,24 @@ const engine = {
     if (this.running) throw new Error("engine busy");
     this.running = true; this.phase = "scanning"; this.stopRequested = false;
     pushActivity({ ev: "scan_start" });
+    web.broadcast({ ev: "scan_start" });
+    // yield so the HTTP response for POST /scan goes out before the heavy walk
+    await new Promise(r => setTimeout(r, 30));
     try {
-      refreshInventory(cfg, state, {
-        silent: true,
-        progress: (n) => { this.current = { label: `scanning… ${n} files` }; },
+      const r = await refreshInventoryAsync(cfg, state, {
+        onProgress: (n, total, sample) => {
+          this.current = { label: `scanning ${n}/${total}` };
+          if (n % 3000 === 0) {
+            pushActivity({ ev: "scan_progress", n, total });
+            web.broadcast({ ev: "scan_progress", n, total });
+          }
+          void sample;
+        },
       });
       persist();
       const s = summary(state);
-      pushActivity({ ev: "scan", ...s });
+      pushActivity({ ev: "scan", ...s, total: r.total });
+      web.broadcast({ ev: "scan", ...s, total: r.total });
     } finally {
       this.running = false; this.phase = "idle"; this.current = null;
     }

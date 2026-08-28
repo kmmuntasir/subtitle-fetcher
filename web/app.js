@@ -131,9 +131,17 @@ function renderEvent(e) {
   }
 }
 
-$("#btnScan").onclick = async () => { await post("scan"); showTab("dashboard"); };
-$("#btnRun").onclick = async () => { await post("run"); showTab("dashboard"); };
-$("#btnStop").onclick = async () => { await post("stop"); setTimeout(loadDashboard, 400); };
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._h);
+  toast._h = setTimeout(() => t.hidden = true, 4000);
+}
+const guarded = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast("⚠ " + e.message); } };
+
+$("#btnScan").onclick = guarded(async () => { await post("scan"); showTab("dashboard"); });
+$("#btnRun").onclick = guarded(async () => { await post("run"); showTab("dashboard"); });
+$("#btnStop").onclick = guarded(async () => { await post("stop"); setTimeout(loadDashboard, 400); });
 
 // ---- folders ---------------------------------------------------------------------
 async function loadFolders() {
