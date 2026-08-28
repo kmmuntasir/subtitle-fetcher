@@ -315,8 +315,9 @@ const icon = (name) => ({
 
 function artImg(key, title, cls = "art", kind = "movie") {
   const initials = (title ?? "?").split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? "").join("");
-  return `<img class="${cls}" loading="lazy" alt="" src="/api/img?key=${encodeURIComponent(key)}&kind=${kind}&token=${encodeURIComponent(TOKEN)}"
-    onerror="this.outerHTML='<div class=&quot;${cls} noart&quot;>${esc(initials)}</div>'">`;
+  const bust = `&_=${Date.now().toString(36)}`;
+  return `<img class="${cls}" loading="lazy" alt="" src="/api/img?key=${encodeURIComponent(key)}&kind=${kind}&token=${encodeURIComponent(TOKEN)}${bust}"
+    onerror="if(!this.dataset.r){this.dataset.r='1';this.src=this.src.split('&_')[0]+'&_='+Date.now().toString(36)}else{this.outerHTML='<div class=&quot;${cls} noart&quot;>${esc(initials)}</div>'}">`;
 }
 
 async function loadLibrary() { renderLibrary().catch(e => toast("Library error: " + e.message)); }
