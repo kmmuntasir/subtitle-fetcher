@@ -234,6 +234,8 @@ async function itemModal(key) {
   };
 }
 $("#modalClose").onclick = () => $("#modal").hidden = true;
+$("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") $("#modal").hidden = true; });
+addEventListener("keydown", (e) => { if (e.key === "Escape") $("#modal").hidden = true; });
 
 // ---- library ----------------------------------------------------------------------
 let libMode = "tv";
