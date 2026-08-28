@@ -268,35 +268,55 @@ const api = {
     return engine.priorityRequest(key.toLowerCase());
   },
 
-  /** resolve poster/backdrop/logo art: Jellyfin-style local files first, OMDB fallback */
+  /** resolve poster/backdrop/logo art: local Jellyfin files (episode dir →
+   *  show dir → grandparent) first; OMDB fallback SAVES the poster into the
+   *  item/show folder so Jellyfin benefits too. */
   async img(sp) {
     const key = sp.get("key");
-    const kind = sp.get("kind") === "movie" ? "movie" : "tv";
     if (!key) return {};
-    const vPath = reconstructPath(key.toLowerCase(), rootPathsOf());
-    const want = sp.get("type") === "backdrop" ? ["backdrop.jpg", "fanart.jpg"]
-               : sp.get("type") === "logo" ? ["logo.png", "clearlogo.png"]
-               : ["poster.jpg", "folder.jpg", "cover.jpg", "default.jpg"];
+    const k = key.toLowerCase();
+    const rec = state.files[k];
+    const kind = rec?.meta?.kind === "episode" ? "tv"
+               : rec?.rootType === "tv" ? "tv"
+               : sp.get("kind") === "tv" ? "tv" : "movie";
+    const type = sp.get("type") === "backdrop" ? "backdrop"
+               : sp.get("type") === "logo" ? "logo" : "poster";
 
-    const scanForArt = (dir) => {
+    const vPath = reconstructPath(k, rootPathsOf());
+    const dir = path.dirname(vPath);
+    const parent = path.dirname(dir);
+
+    // candidate directories, nearest first; for TV go up to the show folder
+    const dirs = kind === "tv" ? [dir, parent, path.dirname(parent)] : [dir];
+
+    // poster requests may fall back to a backdrop/fanart — user prefers
+    // "either one" over nothing
+    const wantFor = {
+      poster:   ["poster.jpg", "folder.jpg", "cover.jpg", "default.jpg", "backdrop.jpg", "fanart.jpg"],
+      backdrop: ["backdrop.jpg", "fanart.jpg", "poster.jpg", "folder.jpg"],
+      logo:     ["logo.png", "clearlogo.png"],
+    }[type];
+
+    const scanForArt = (d, names) => {
       try {
-        const files = fs.readdirSync(dir);
-        for (const wantName of want)
+        const files = fs.readdirSync(d);
+        for (const wantName of names)
           for (const f of files)
-            if (f.toLowerCase() === wantName && fs.statSync(path.join(dir, f)).size < 25e6)
-              return path.join(dir, f);
+            if (f.toLowerCase() === wantName && fs.statSync(path.join(d, f)).size < 25e6)
+              return path.join(d, f);
       } catch {}
       return null;
     };
 
-    let dir = path.dirname(vPath);
-    const art = scanForArt(dir) ?? (kind === "tv" ? scanForArt(path.dirname(dir)) : null);
-    if (art) return { file: art };
+    for (const d of dirs) {
+      const art = scanForArt(d, wantFor);
+      if (art) return { file: art };
+    }
 
-    // OMDB fallback (needs a free key in config.images.omdbApiKey)
+    // ---- nothing local: fetch from OMDB and PERSIST into the library ----
     const omdbKey = cfg.images?.omdbApiKey;
-    if (!omdbKey) return {};
-    const meta = state.files[key.toLowerCase()]?.meta ?? metaFromKey(key);
+    if (!omdbKey || type === "logo") return {};
+    const meta = rec?.meta ?? metaFromKey(k);
     const title = meta?.show ?? meta?.title;
     if (!title) return {};
     const q = `${title.toLowerCase()}|${meta.year ?? ""}|${meta.kind}`;
@@ -310,7 +330,23 @@ const api = {
       } catch { omdbCache[q] = ""; }
       saveOmdbCacheDebounced();
     }
-    return omdbCache[q] ? { redirect: omdbCache[q] } : {};
+    const posterUrl = omdbCache[q];
+    if (!posterUrl) return {};
+
+    // save target: show folder for TV (parent of episode dir), movie folder for movies
+    const saveDir = kind === "tv" && fs.existsSync(parent) && parent.length > vPath.indexOf("/media/") ? parent : dir;
+    const dest = path.join(saveDir, type === "backdrop" ? "backdrop.jpg" : "poster.jpg");
+    if (!fs.existsSync(dest)) {
+      try {
+        const r = await fetch(posterUrl, { signal: AbortSignal.timeout(15000) });
+        const buf = Buffer.from(await r.arrayBuffer());
+        const isImg = buf.length > 1024 &&
+          ((buf[0] === 0xff && buf[1] === 0xd8) || (buf[0] === 0x89 && buf[1] === 0x50));   // JPEG / PNG magic
+        if (isImg) { fs.mkdirSync(saveDir, { recursive: true }); fs.writeFileSync(dest, buf); pushActivity({ ev: "art_saved", key: k, file: dest }); }
+      } catch { /* fall through to redirect */ }
+    }
+    if (fs.existsSync(dest)) return { file: dest };
+    return { redirect: posterUrl };     // last resort: hot-link so the UI still shows art
   },
 
   parkItem(key) {
@@ -331,7 +367,7 @@ const api = {
     for (const [k, r] of Object.entries(state.files)) {
       const meta = r.meta ?? metaFromKey(k);
       if (meta.kind === "episode") {
-        const showName = meta.show || prettyTitle(k.split("/").slice(-2, -1)[0]);
+        const showName = prettyTitle(meta.show || k.split("/").slice(-2, -1)[0]);
         const sh = shows.get(showName) ?? { show: showName, seasons: new Map(), total: 0, covered: 0 };
         const season = sh.seasons.get(meta.season) ?? [];
         season.push({ key: k, episode: meta.episode, status: r.status, rel: r.rel ?? null });

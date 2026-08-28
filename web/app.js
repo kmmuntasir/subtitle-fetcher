@@ -143,6 +143,8 @@ function toast(msg) {
   clearTimeout(toast._h);
   toast._h = setTimeout(() => t.hidden = true, 4000);
 }
+addEventListener("error", (e) => toast("⚠ " + (e.message ?? "script error")));
+addEventListener("unhandledrejection", (e) => toast("⚠ " + (e.reason?.message ?? e.reason ?? "async error")));
 const guarded = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast("⚠ " + e.message); } };
 
 $("#btnScan").onclick = guarded(async () => { await post("scan"); showTab("dashboard"); });
@@ -292,12 +294,16 @@ addEventListener("keydown", (e) => { if (e.key === "Escape") $("#modal").hidden 
 // ---- library ----------------------------------------------------------------------
 let libMode = "tv";
 let libData = { tv: [], movies: [] };
-$$(".seg [data-lib]").forEach(b => b.onclick = () => {
-  libMode = b.dataset.lib;
-  $$(".seg [data-lib]").forEach(x => x.classList.toggle("active", x === b));
-  renderLibrary();
-});
-$("#libSearch").oninput = () => renderLibrary();
+function initLibraryTabs() {
+  $$("#libTabs [data-lib]").forEach(b => b.addEventListener("click", () => {
+    libMode = b.dataset.lib;
+    $$("#libTabs [data-lib]").forEach(x => x.classList.toggle("active", x === b));
+    renderLibrary().catch(e => toast("Library error: " + e.message));
+  }));
+  $("#libSearch").addEventListener("input", () =>
+    renderLibrary().catch(e => toast("Library error: " + e.message)));
+}
+initLibraryTabs();
 
 const icon = (name) => ({
   search: `<svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
@@ -307,13 +313,13 @@ const icon = (name) => ({
   alert: `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
 }[name] ?? "");
 
-function artImg(key, title, cls = "art") {
+function artImg(key, title, cls = "art", kind = "movie") {
   const initials = (title ?? "?").split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? "").join("");
-  return `<img class="${cls}" loading="lazy" alt="" src="/api/img?key=${encodeURIComponent(key)}&kind=movie&token=${encodeURIComponent(TOKEN)}"
+  return `<img class="${cls}" loading="lazy" alt="" src="/api/img?key=${encodeURIComponent(key)}&kind=${kind}&token=${encodeURIComponent(TOKEN)}"
     onerror="this.outerHTML='<div class=&quot;${cls} noart&quot;>${esc(initials)}</div>'">`;
 }
 
-async function loadLibrary() { renderLibrary(); }
+async function loadLibrary() { renderLibrary().catch(e => toast("Library error: " + e.message)); }
 async function renderLibrary() {
   const q = $("#libSearch").value.trim().toLowerCase();
   if (libMode === "movie") {
@@ -322,7 +328,7 @@ async function renderLibrary() {
     $("#libShows").hidden = true; $("#libMovies").hidden = false;
     $("#libMovies").innerHTML = list.slice(0, 500).map(m => `
       <div class="pcard" data-k="${esc(m.key)}">
-        ${artImg(m.key, m.title)}
+        ${artImg(m.key, m.title, "art", "movie")}
         <div class="meta"><div class="t">${esc(m.title)}</div>
           <div class="y">${esc(m.year ?? "")}<span class="st ${m.status}" style="margin-left:auto">${m.status === "done" || m.status === "covered" ? "✓" : m.status}</span></div></div>
       </div>`).join("") + (list.length > 500 ? `<div class="muted">…${list.length - 500} more — refine search</div>` : "");
@@ -337,7 +343,7 @@ async function renderLibrary() {
     const pct = sh.total ? Math.round(100 * sh.covered / sh.total) : 0;
     const anyKey = sh.seasons[0]?.episodes[0]?.key ?? "";
     return `<div class="pcard" data-show="${esc(sh.show)}" data-k="${esc(anyKey)}">
-      ${artImg(anyKey, sh.show)}
+      ${artImg(anyKey, sh.show, "art", "tv")}
       <div class="meta"><div class="t">${icon("tv")} ${esc(sh.show)}</div>
         <div class="y"><span class="bar" style="display:inline-block;width:52px;height:5px;background:var(--panel2);border-radius:3px;vertical-align:middle"><i style="display:block;height:100%;width:${pct}%;background:var(--ok);border-radius:3px"></i></span> ${sh.covered}/${sh.total}</div></div>
     </div>`;
@@ -353,7 +359,7 @@ function showModal(showName) {
   $("#modal").hidden = false;
   $("#modalBody").innerHTML = `
     <div style="display:flex;gap:16px;align-items:flex-start">
-      ${artImg(anyKey, sh.show, "thumb")}
+      ${artImg(anyKey, sh.show, "thumb", "tv")}
       <div style="flex:1">
         <h3 style="margin:0 0 6px">${icon("tv")} ${esc(sh.show)}</h3>
         <p class="muted" style="margin:0 0 4px"><span class="bar" style="display:inline-block;width:120px;height:6px;background:var(--panel2);border-radius:3px;vertical-align:middle"><i style="display:block;height:100%;width:${pct}%;background:var(--ok);border-radius:3px"></i></span> ${sh.covered}/${sh.total} episodes subtitled (${pct}%)</p>
