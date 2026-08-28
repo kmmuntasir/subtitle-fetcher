@@ -966,7 +966,9 @@ export function scanRoots(cfg, onProgress) {
   }
   for (const root of cfg.roots) {
     if (!fs.existsSync(root)) { console.error(RED(`Root unreachable: ${root}`)); continue; }
-    const rels = fs.readdirSync(root, { recursive: true });
+    let rels;
+    try { rels = fs.readdirSync(root, { recursive: true }); }
+    catch (e) { console.error(RED(`Root walk failed: ${root} (${e.message})`)); continue; }
     for (const rel of rels) {
       if (!VIDEO_EXTS.has(path.extname(rel).toLowerCase())) continue;
       const n = norm(rel);
