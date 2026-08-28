@@ -4,6 +4,7 @@
 // Install as a boot service with:  node install.mjs
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,6 +30,7 @@ const argOf = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i +
 
 // ---- core objects ----------------------------------------------------------
 let cfg = loadConfig(CONFIG_PATH);
+delete cfg.server.tokenPrev;                       // grace token only lives for one session
 if (argOf("--port")) { cfg.server.port = +argOf("--port"); }
 if (argOf("--token")) { cfg.server.token = argOf("--token"); }
 
@@ -99,8 +101,22 @@ const api = {
       id: p.id, enabled: true,
       quotaLeft: typeof p.quotaLeft === "number" ? p.quotaLeft : null,
     }));
+    // per-root progress for the folders tab
+    const perRoot = normalizeRoots(cfg).map(r => {
+      const prefix = r.path.toLowerCase();
+      let total = 0, pending = 0, done = 0;
+      for (const [k, rec] of Object.entries(state.files)) {
+        if (!k.startsWith(prefix)) continue;
+        total++;
+        if (rec.status === "done" || rec.status === "covered") done++;
+        else if (rec.status === "pending" || rec.status === "failed") pending++;
+      }
+      return { path: r.path, type: r.type, reachable: fs.existsSync(r.path), total, pending, done };
+    });
     return {
       totals: s,
+      perRoot,
+      lan: lanInfo(),
       engine: {
         running: engine.running, phase: engine.phase, current: engine.current,
         lastResult: engine.lastResult,
@@ -211,6 +227,17 @@ const api = {
     return { requeued: true };
   },
 
+  parkItem(key) {
+    const k = key.toLowerCase();
+    const rec = state.files[k];
+    if (!rec) throw new Error("unknown item");
+    rec.status = rec.status === "parked" ? "pending" : "parked";
+    rec.attempts = rec.status === "pending" ? 0 : rec.attempts;
+    persist();
+    pushActivity({ ev: "park", key: k, status: rec.status });
+    return { status: rec.status };
+  },
+
   library(sp) {
     const type = sp.get("type") ?? "tv";
     const shows = new Map();
@@ -313,9 +340,9 @@ const api = {
     wl(cfg, body, ["language", "providers", "maxPerRun", "hearingImpairedOk", "aiTranslatedOk", "attemptsBeforePark", "roots"]);
     if (body.schedule) cfg.schedule = { ...cfg.schedule, ...body.schedule };
     if (body.server) {
-      const tokenChanging = body.server.token && body.server.token !== cfg.server.token;
+      const oldToken = cfg.server.token;
       cfg.server = { ...cfg.server, ...body.server };
-      if (tokenChanging) cfg.server.tokenPrev = cfg.server.token;   // old token stays valid this session
+      if (body.server.token && body.server.token !== oldToken) cfg.server.tokenPrev = oldToken;  // old stays valid this session
     }
     if (body.opensubtitles) {
       cfg.apiKey = body.opensubtitles.apiKey ?? cfg.apiKey;
@@ -349,6 +376,16 @@ function nextRunDescription() {
   return next.toISOString();
 }
 
+function lanInfo() {
+  let ip = "127.0.0.1";
+  try {
+    for (const list of Object.values(os.networkInterfaces()))
+      for (const n of list ?? [])
+        if (n.family === "IPv4" && !n.internal) { ip = n.address; break; }
+  } catch {}
+  return { url: `http://${ip}:${cfg.server.port}`, ip, port: cfg.server.port, token: cfg.server.token };
+}
+
 // ---- scheduler loop ------------------------------------------------------------
 let lastScheduledDay = state.lastRunDate ?? null;
 setInterval(async () => {
@@ -371,7 +408,9 @@ setInterval(async () => {
 
 // ---- boot ---------------------------------------------------------------------
 const web = new WebServer({
-  port: cfg.server.port, bind: cfg.server.bind, token: cfg.server.token,
+  port: cfg.server.port, bind: cfg.server.bind,
+  token: () => cfg.server.token,
+  tokenPrev: () => cfg.server.tokenPrev ?? null,
   getConfig: () => cfg,
   api,
 });

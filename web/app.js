@@ -60,6 +60,25 @@ async function loadDashboard() {
     ? `${st.engine.lastResult.done} downloaded · ${st.engine.lastResult.missed} missed · ${st.engine.lastResult.minutes} min (${st.engine.lastResult.at.slice(0, 16).replace("T", " ")})`
     : "no run yet this session";
   if (st.scannedAt) $("#lastRun").textContent += ` · scan ${st.scannedAt.slice(0, 16).replace("T", " ")}`;
+  if (st.lan) $("#lanUrl").innerHTML = `<a href="${esc(st.lan.url)}/?token=${encodeURIComponent(st.lan.token)}">${esc(st.lan.url)}</a>`;
+
+  loadChart().catch(() => {});
+}
+async function loadChart() {
+  const r = await api("report?days=14");
+  const days = r.downloadsPerDay;
+  const max = Math.max(1, ...days.map(([, n]) => n));
+  const map = Object.fromEntries(days);
+  const cols = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400e3).toISOString().slice(0, 10);
+    const n = map[d] ?? 0;
+    cols.push(`<div class="col"><div class="num">${n || ""}</div><div class="bar" style="height:${Math.round(84 * n / max)}px"></div><div class="day">${d.slice(5)}</div></div>`);
+  }
+  $("#chart").innerHTML = cols.join("");
+  const total = r.byProvider.reduce((a, [, n]) => a + n, 0) || 1;
+  $("#provShare").innerHTML = r.byProvider.map(([p, n]) =>
+    `<span class="pill"><b>${esc(p)}</b>${n} (${Math.round(100 * n / total)}%)</span>`).join("") || `<span class="muted">no downloads in window yet</span>`;
 }
 const tile = (num, lbl, cls) => `<div class="tile ${cls}"><div class="num">${num ?? 0}</div><div class="lbl">${lbl}</div></div>`;
 
@@ -101,11 +120,18 @@ $("#btnStop").onclick = async () => { await post("stop"); setTimeout(loadDashboa
 
 // ---- folders ---------------------------------------------------------------------
 async function loadFolders() {
-  const cfg = await api("config");
+  const [cfg, st] = await Promise.all([api("config"), api("status")]);
+  const stats = Object.fromEntries((st.perRoot ?? []).map(r => [r.path, r]));
   const roots = (cfg.roots ?? []).map(r => typeof r === "string" ? { path: r, type: "auto" } : r);
   $("#rootList").innerHTML = roots.length
-    ? roots.map((r, i) => `<div class="root"><span class="st">${r.type ?? "auto"}</span> <span class="path">${esc(r.path)}</span>
-        <button data-del="${i}" class="danger" style="margin-left:auto">remove</button></div>`).join("")
+    ? roots.map((r, i) => {
+        const s = stats[r.path];
+        const dot = !s ? "·" : s.reachable ? "🟢" : "🔴";
+        const counts = s ? `${s.done}/${s.total} covered${s.pending ? `, ${s.pending} queued` : ""}` : "not scanned yet";
+        return `<div class="root"><span>${dot}</span> <span class="st">${r.type ?? "auto"}</span>
+        <span><span class="path">${esc(r.path)}</span><br><span class="muted" style="font-size:12px">${counts}</span></span>
+        <button data-del="${i}" class="danger" style="margin-left:auto">remove</button></div>`;
+      }).join("")
     : `<div class="muted">No folders yet — browse or type a path below.</div>`;
   $$("#rootList [data-del]").forEach(b => b.onclick = async () => {
     roots.splice(+b.dataset.del, 1);
@@ -175,11 +201,18 @@ async function itemModal(key) {
     ${it.lastError ? `<p class="muted">last error: ${esc(it.lastError)}</p>` : ""}
     <div class="row">
       <button id="mRetry" class="primary">Re-queue</button>
+      <button id="mPark" class="ghost">${it.status === "parked" ? "Un-park" : "Park"}</button>
       <button id="mAlts">Find alternatives…</button>
     </div>
-    <div id="alts"><div class="muted">loading candidates…</div></div>`;
+    ${it.history?.length ? `<div class="hist"><b style="font-size:12px">history</b>${it.history.slice().reverse().map(h =>
+      `<div>${esc(h.at?.slice(0, 16).replace("T", " ") ?? "")} · ${esc(h.provider ?? "?")} · «${esc(h.release ?? "?")}» · ${esc(h.outcome ?? "")}</div>`).join("")}</div>` : ""}
+    <div id="alts"></div>`;
   $("#modalClose").onclick = () => $("#modal").hidden = true;
   $("#mRetry").onclick = async () => { await post(`items/${encodeURIComponent(key)}/retry`); $("#modal").hidden = true; loadQueue(); };
+  $("#mPark").onclick = async () => {
+    const r = await post(`items/${encodeURIComponent(key)}/park`);
+    $("#modal").hidden = true; loadQueue(); if (r.status === "pending") itemModal(key);
+  };
   $("#mAlts").onclick = async () => {
     $("#alts").innerHTML = "<div class='muted'>searching providers…</div>";
     try {
@@ -270,6 +303,26 @@ $("#btnSaveSettings").onclick = async () => {
   $("#saveMsg").textContent = "saved ✔";
   setTimeout(() => $("#saveMsg").textContent = "", 2500);
 };
+
+// token management
+$("#btnSaveSettings").insertAdjacentHTML("afterend", `
+  <div class="card" style="margin-top:14px">
+    <h3>Access token</h3>
+    <div class="row"><input id="sToken" style="flex:1"><button id="btnTokGen">Generate new</button><button id="btnTokSave" class="primary">Save token</button></div>
+    <div class="muted">After saving, re-open the app with the new token (old one stays valid until the service restarts). The LAN URL is shown on the dashboard.</div>
+  </div>`);
+setTimeout(() => {
+  const stReady = api("status").then(st => { $("#sToken").value = st.lan?.token ?? ""; });
+  $("#btnTokGen").onclick = () => {
+    const b = new Uint8Array(12); crypto.getRandomValues(b);
+    $("#sToken").value = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+  };
+  $("#btnTokSave").onclick = async () => {
+    await api("config", { method: "PUT", body: JSON.stringify({ server: { token: $("#sToken").value.trim() } }) });
+    localStorage.setItem("sf_token", $("#sToken").value.trim());
+    $("#saveMsg").textContent = "token saved — reuse your bookmark with the new token";
+  };
+}, 0);
 
 // ---- boot -------------------------------------------------------------------------
 showTab(location.hash.slice(2) || "dashboard");
