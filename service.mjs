@@ -52,7 +52,9 @@ const engine = {
   current: null,                                            // item being worked
   lastRunDate: state.lastRunDate ?? null,
 
-  /** user clicked "fetch now" on a specific item */
+  /** user clicked "fetch now" on a specific item — enqueue and return at once;
+   *  a background drain loop does the actual fetching so multi-hundred-item
+   *  requests (whole-show "Fetch Missing") survive the browser walking away. */
   async priorityRequest(key) {
     const k = key.toLowerCase();
     const rec = state.files[k];
@@ -61,17 +63,30 @@ const engine = {
     if (rec) { rec.status = "pending"; rec.attempts = 0; persist(); }
 
     if (this.phase === "fetching") { prioritySet.add(k); return { queued: true, mode: "next-in-run" }; }
-    if (miniRunning) { prioritySet.add(k); return { queued: true, mode: "queued" }; }
+    prioritySet.add(k);
+    this.drainPriority();
+    return { queued: true, mode: "immediate" };
+  },
+
+  /** keeps a scoped runner alive while the priority set is non-empty */
+  drainPriority() {
+    if (miniRunning) return;
     miniRunning = true;
-    pushActivity({ ev: "priority", key: k });
-    try {
-      await runFetch(cfg, state, {
-        onlySub: k, saveState: persist,
-        takePriority: () => { const ks = [...prioritySet]; prioritySet.clear(); return ks; },
-        onEvent: (e) => { pushActivity(e); web.broadcast(e); },
-      });
-      return { queued: true, mode: "immediate" };
-    } finally { miniRunning = false; }
+    (async () => {
+      try {
+        while (prioritySet.size > 0 && this.phase !== "fetching") {
+          const k = [...prioritySet][0];
+          prioritySet.delete(k);
+          pushActivity({ ev: "priority", key: k });
+          await runFetch(cfg, state, {
+            onlySub: k, saveState: persist, skipRescan: true,
+            onEvent: (e) => { pushActivity(e); web.broadcast(e); },
+          });
+        }
+      } catch (err) {
+        pushActivity({ ev: "error", message: String(err?.message ?? err) });
+      } finally { miniRunning = false; }
+    })();
   },
 
   async startScan() {
@@ -101,7 +116,7 @@ const engine = {
     }
   },
   async startRun(limit = null, only = "") {
-    if (this.running) throw new Error("engine busy");
+    if (this.running || miniRunning) throw new Error("engine busy");
     this.running = true; this.phase = "fetching"; this.stopRequested = false;
     this.startedAt = Date.now();
     openLog(LOG_DIR, "run");
