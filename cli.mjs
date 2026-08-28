@@ -129,6 +129,7 @@ async function cmdRun(cfg, argv) {
   log("\n──── summary ────");
   log(` downloaded : ${GRN(String(result.done))} ${JSON.stringify(result.perProvider)}`);
   log(` missed     : ${result.missed}`);
+  if (result.deferred) log(` deferred   : ${result.deferred} ${DIM("(no source available for them today — requeued, no attempt spent)")}`);
   const left = summary(loadState(STATE_PATH));
   log(` still queued: ${left.pending + left.failed} ${DIM(`(${mins} min)`)}`);
   if (result.missed > 0 && result.missed <= 60) {

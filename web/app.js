@@ -62,6 +62,7 @@ async function loadDashboard() {
   if (st.scannedAt) $("#lastRun").textContent += ` · scan ${st.scannedAt.slice(0, 16).replace("T", " ")}`;
   if (st.lan) $("#lanUrl").innerHTML = `<a href="${esc(st.lan.url)}/?token=${encodeURIComponent(st.lan.token)}">${esc(st.lan.url)}</a>`;
 
+  if (!feedEl.dataset.backfilled) { feedEl.dataset.backfilled = "1"; feedBackfill(); }
   loadChart().catch(() => {});
 }
 async function loadChart() {
@@ -82,17 +83,33 @@ async function loadChart() {
 }
 const tile = (num, lbl, cls) => `<div class="tile ${cls}"><div class="num">${num ?? 0}</div><div class="lbl">${lbl}</div></div>`;
 
-// SSE live feed
-let feedLines = [];
+// SSE live feed — append-only; autoscrolls ONLY while you're pinned to bottom
+const feedEl = $("#feed");
+function feedAppend(html) {
+  const atBottom = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 48;
+  const div = document.createElement("div");
+  div.className = "line";
+  div.innerHTML = html;
+  feedEl.appendChild(div);
+  while (feedEl.children.length > 300) feedEl.removeChild(feedEl.firstChild);
+  if (atBottom) feedEl.scrollTop = feedEl.scrollHeight;
+}
+async function feedBackfill() {
+  try {
+    const items = await api("activity?limit=60");        // newest-first → append oldest first
+    for (const line of items.reverse()) {
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      feedAppend(renderEvent(e));
+    }
+    feedEl.scrollTop = feedEl.scrollHeight;              // start pinned
+  } catch { /* service may be busy */ }
+}
 try {
   const es = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
   es.onmessage = (m) => {
     let e; try { e = JSON.parse(m.data); } catch { return; }
     if (e.ev === "hello") return;
-    feedLines.push(renderEvent(e));
-    if (feedLines.length > 300) feedLines.shift();
-    $("#feed").innerHTML = feedLines.slice(-120).map(l => `<div class="line">${l}</div>`).join("");
-    $("#feed").scrollTop = 1e9;
+    feedAppend(renderEvent(e));
   };
 } catch { /* SSE optional */ }
 
