@@ -372,16 +372,33 @@ const api = {
     const type = sp.get("type") ?? "tv";
     const shows = new Map();
     const movies = [];
+
+    // raw folder segment from the (original-case) path — display fallback
+    // that needs no scan: carries the year stamp and true show name
+    const showInfoFromKey = (k) => {
+      const segs = k.split("/").filter(Boolean);
+      const tvIdx = segs.findIndex(s => /^tv[\s._-]*series$/i.test(s));
+      const seg = tvIdx >= 0 ? segs[tvIdx + 1] : segs[segs.length - 2] ?? "";
+      const ym = /\((\d{4})(?:\s*[-–—]\s*(\d{4}))?\)/.exec(seg);
+      let name = seg.replace(/\((?:19|20)\d{2}(?:\s*[-–—]\s*(?:19|20)\d{2})?\)/g, "")
+                    .replace(/\bseason[s]?\b.*$|\bs\d{1,2}\b.*$/i, "")
+                    .replace(/[._]/g, " ").replace(/\s+/g, " ").trim();
+      if (/^(?:complete|full|series|all)$/i.test(name)) name = "";
+      return { name: name ? prettyTitle(name) : "", from: ym ? +ym[1] : null, to: ym ? +(ym[2] ?? ym[1]) : null };
+    };
+
     for (const [k, r] of Object.entries(state.files)) {
       const meta = r.meta ?? metaFromKey(k);
       if (meta.kind === "episode") {
-        const showName = prettyTitle(meta.show || k.split("/").slice(-2, -1)[0]);
+        const raw = showInfoFromKey(k);
+        const showName = (meta.show && meta.show !== "$1" ? prettyTitle(meta.show) : "") || raw.name || "(unknown)";
         const sh = shows.get(showName) ?? { show: showName, seasons: new Map(), total: 0, covered: 0, from: null, to: null };
         const season = sh.seasons.get(meta.season) ?? [];
         season.push({ key: k, episode: meta.episode, status: r.status, rel: r.rel ?? null });
         sh.seasons.set(meta.season, season);
         sh.total++; if (r.status === "done" || r.status === "covered") sh.covered++;
-        if (meta.from) { sh.from = Math.min(sh.from ?? meta.from, meta.from); sh.to = Math.max(sh.to ?? (meta.to ?? meta.from), meta.to ?? meta.from); }
+        const from = meta.from ?? raw.from, to = meta.to ?? raw.to;
+        if (from) { sh.from = Math.min(sh.from ?? from, from); sh.to = Math.max(sh.to ?? to, to); }
         shows.set(showName, sh);
       } else {
         const title = prettyTitle(meta.title || k.split("/").pop().replace(/\.[^.]+$/, ""));
