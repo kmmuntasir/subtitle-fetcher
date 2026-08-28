@@ -226,13 +226,20 @@ async function itemModal(key) {
     ${it.lastError ? `<p class="muted">last error: ${esc(it.lastError)}</p>` : ""}
     <div class="row">
       <button id="mRetry" class="primary">Re-queue</button>
+      <button id="mPrio" class="primary">${icon("zap")} Fetch now (priority)</button>
       <button id="mPark" class="ghost">${it.status === "parked" ? "Un-park" : "Park"}</button>
-      <button id="mAlts">Find alternatives…</button>
+      <button id="mAlts">${icon("search")} Find alternatives…</button>
     </div>
     ${it.history?.length ? `<div class="hist"><b style="font-size:12px">history</b>${it.history.slice().reverse().map(h =>
       `<div>${esc(h.at?.slice(0, 16).replace("T", " ") ?? "")} · ${esc(h.provider ?? "?")} · «${esc(h.release ?? "?")}» · ${esc(h.outcome ?? "")}</div>`).join("")}</div>` : ""}
     <div id="alts"></div>`;
   $("#modalClose").onclick = () => $("#modal").hidden = true;
+  $("#mPrio").onclick = async () => {
+    const r = await post(`items/${encodeURIComponent(key)}/priority`);
+    $("#mPrio").disabled = true;
+    $("#mPrio").textContent = r.note ? "has subtitle — swap below" : r.mode === "next-in-run" ? "⏩ next in current run" : "⏩ queued";
+    if (!r.note && $("#btnRun").disabled) loadDashboard();
+  };
   $("#mRetry").onclick = async () => { await post(`items/${encodeURIComponent(key)}/retry`); $("#modal").hidden = true; loadQueue(); };
   $("#mPark").onclick = async () => {
     const r = await post(`items/${encodeURIComponent(key)}/park`);
@@ -264,43 +271,96 @@ addEventListener("keydown", (e) => { if (e.key === "Escape") $("#modal").hidden 
 
 // ---- library ----------------------------------------------------------------------
 let libMode = "tv";
-$("#libToggle").onclick = () => { libMode = libMode === "tv" ? "movie" : "tv"; loadLibrary(); };
-async function loadLibrary() {
-  const d = await api("library?type=" + libMode);
-  $("#libTitle").textContent = libMode === "tv" ? "TV shows" : "Movies";
-  $("#libToggle").textContent = libMode === "tv" ? "switch to movies" : "switch to TV";
-  $("#libShows").hidden = libMode !== "tv";
-  $("#libMovies").hidden = libMode !== "movie";
+let libData = { tv: [], movies: [] };
+$$(".seg [data-lib]").forEach(b => b.onclick = () => {
+  libMode = b.dataset.lib;
+  $$(".seg [data-lib]").forEach(x => x.classList.toggle("active", x === b));
+  renderLibrary();
+});
+$("#libSearch").oninput = () => renderLibrary();
+
+const icon = (name) => ({
+  search: `<svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  film: `<svg class="icon" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>`,
+  tv: `<svg class="icon" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="15" rx="2"/><polyline points="17 2 12 7 7 2"/></svg>`,
+  zap: `<svg class="icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
+  alert: `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+}[name] ?? "");
+
+function artImg(key, title, cls = "art") {
+  const initials = (title ?? "?").split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? "").join("");
+  return `<img class="${cls}" loading="lazy" alt="" src="/api/img?key=${encodeURIComponent(key)}&kind=movie&token=${encodeURIComponent(TOKEN)}"
+    onerror="this.outerHTML='<div class=&quot;${cls} noart&quot;>${esc(initials)}</div>'">`;
+}
+
+async function loadLibrary() { renderLibrary(); }
+async function renderLibrary() {
+  const q = $("#libSearch").value.trim().toLowerCase();
   if (libMode === "movie") {
-    $("#libMovieRows").innerHTML = d.movies.map(m => `<tr>
-      <td>${esc(m.title)}</td><td>${esc(m.year ?? "")}</td>
-      <td><span class="st ${m.status}">${m.status}</span></td><td class="path">${esc(m.rel ?? "")}</td></tr>`).join("");
+    if (!libData.movies.length) libData.movies = (await api("library?type=movie")).movies;
+    const list = q ? libData.movies.filter(m => (m.title ?? "").toLowerCase().includes(q)) : libData.movies;
+    $("#libShows").hidden = true; $("#libMovies").hidden = false;
+    $("#libMovies").innerHTML = list.slice(0, 500).map(m => `
+      <div class="pcard" data-k="${esc(m.key)}">
+        ${artImg(m.key, m.title)}
+        <div class="meta"><div class="t">${esc(m.title)}</div>
+          <div class="y">${esc(m.year ?? "")}<span class="st ${m.status}" style="margin-left:auto">${m.status === "done" || m.status === "covered" ? "✓" : m.status}</span></div></div>
+      </div>`).join("") + (list.length > 500 ? `<div class="muted">…${list.length - 500} more — refine search</div>` : "");
+    bindCardClicks();
     return;
   }
-  $("#libShows").innerHTML = d.tv.map(sh => {
+  if (!libData.tv.length) libData.tv = (await api("library?type=tv")).tv;
+  const list = q ? libData.tv.filter(s => s.show.toLowerCase().includes(q)) : libData.tv;
+  $("#libMovies").hidden = true; $("#libShows").hidden = false;
+  $("#libShows").innerHTML = list.slice(0, 400).map(sh => {
     const pct = sh.total ? Math.round(100 * sh.covered / sh.total) : 0;
-    return `<details class="show"><summary><b>${esc(sh.show)}</b>
-      <span class="bar"><i style="width:${pct}%"></i></span> ${sh.covered}/${sh.total} (${pct}%)</summary>
-      ${sh.seasons.map(se => `<div class="eps"><div class="muted" style="margin:4px 0 2px">Season ${se.season}</div>` +
+    const anyKey = sh.seasons[0]?.episodes[0]?.key ?? "";
+    return `<details class="show"><summary class="showhead">
+        ${artImg(anyKey, sh.show)}
+        <span style="flex:1"><b>${icon("tv")} ${esc(sh.show)}</b>
+        <span class="bar"><i style="width:${pct}%"></i></span> ${sh.covered}/${sh.total} (${pct}%)</span>
+        <button class="ghost prio-show" data-show="${esc(sh.show)}">${icon("zap")} fetch missing</button>
+      </summary>
+      ${sh.seasons.map(se => `<div class="eps"><div class="muted" style="margin:6px 0 2px">Season ${se.season}</div>` +
         se.episodes.map(ep => `<span class="ep ${ep.status === "done" || ep.status === "covered" ? "ok" : ""}"
-          data-k="${esc(ep.key)}">E${String(ep.episode).padStart(2, "0")} ${ep.status === "done" || ep.status === "covered" ? "✓" : "✗"}</span>`).join("") + `</div>`).join("")}
+          data-k="${esc(ep.key)}" title="${esc(ep.rel ?? ep.status)}">E${String(ep.episode).padStart(2, "0")} ${ep.status === "done" || ep.status === "covered" ? "✓" : "✗"}</span>`).join("") + `</div>`).join("")}
     </details>`;
   }).join("");
+  bindCardClicks();
+  $$("#libShows .prio-show").forEach(b => b.onclick = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const show = b.dataset.show;
+    const sh = libData.tv.find(x => x.show === show);
+    b.disabled = true;
+    let n = 0;
+    for (const se of sh.seasons) for (const ep of se.episodes)
+      if (ep.status !== "done" && ep.status !== "covered") { await post(`items/${encodeURIComponent(ep.key)}/priority`); n++; }
+    toast(`⏩ ${n} episodes queued with priority`);
+  });
+}
+function bindCardClicks() {
+  $$(".pcard").forEach(c => c.onclick = () => itemModal(c.dataset.k));
   $$("#libShows .ep").forEach(el => el.onclick = () => itemModal(el.dataset.k));
 }
 
 // ---- logs --------------------------------------------------------------------------
 async function loadLogList() {
-  const files = await api("logs");
-  $("#logFile").innerHTML = files.map(f => `<option>${esc(f)}</option>`).join("");
+  const files = await api("logs");                                  // [{file,size,mtime}] newest first
+  $("#logFile").innerHTML = files.map(f =>
+    `<option value="${esc(f.file)}">${esc(f.file)} — ${f.size > 1048576 ? (f.size / 1048576).toFixed(1) + " MB" : Math.round(f.size / 1024) + " KB"}</option>`).join("")
+    || `<option value="">(no log files yet)</option>`;
   $("#btnLogGo").onclick = loadLog;
   loadLog();
 }
 async function loadLog() {
   const f = $("#logFile").value;
-  if (!f) return;
-  const d = await api(`log?file=${encodeURIComponent(f)}&bytes=12000`);
-  $("#logView").textContent = d.text;
+  if (!f) { $("#logView").textContent = "No log files yet — they appear after the first scan/run."; return; }
+  try {
+    const d = await api(`log?file=${encodeURIComponent(f)}&bytes=16000`);
+    $("#logView").textContent = d.size === 0
+      ? "(this file is empty — it fills when its command runs)"
+      : d.text;
+  } catch (e) { $("#logView").textContent = "⚠ " + e.message; }
   if ($("#logFollow").checked) $("#logView").scrollTop = 1e9;
 }
 setInterval(() => { if (location.hash.endsWith("logs") && $("#logFollow").checked) loadLog(); }, 4000);
@@ -316,6 +376,7 @@ async function loadSettings() {
   $("#sSchedTime").value = c.schedule?.time ?? "13:05";
   $("#sOsKey").value = c.opensubtitles?.apiKey ?? c.apiKey ?? "";
   $("#sOsUser").value = c.opensubtitles?.username ?? c.username ?? "";
+  $("#sOmdb").value = c.images?.omdbApiKey ?? "";
 }
 $("#btnSaveSettings").onclick = async () => {
   const body = {
@@ -325,6 +386,7 @@ $("#btnSaveSettings").onclick = async () => {
     attemptsBeforePark: +$("#sPark").value || 3,
     schedule: { enabled: $("#sSchedOn").checked, time: $("#sSchedTime").value.trim() || "13:05" },
     opensubtitles: { apiKey: $("#sOsKey").value.trim(), username: $("#sOsUser").value.trim(), password: $("#sOsPass").value },
+    images: { omdbApiKey: $("#sOmdb").value.trim() },
   };
   await api("config", { method: "PUT", body: JSON.stringify(body) });
   $("#saveMsg").textContent = "saved ✔";

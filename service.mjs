@@ -43,11 +43,37 @@ openLog(LOG_DIR, "service");
 setLogHook((_msg, plain) => pushActivity({ ev: "log", line: plain.slice(0, 200) }));
 
 // ---- engine control ---------------------------------------------------------
+const prioritySet = new Set();       // keys the user wants fetched next
+let miniRunning = false;             // scoped single-item fetch (runs alongside scans)
+
 const engine = {
   running: false, stopRequested: false,
   lastResult: null, startedAt: null, phase: "idle",        // idle|scanning|fetching
   current: null,                                            // item being worked
   lastRunDate: state.lastRunDate ?? null,
+
+  /** user clicked "fetch now" on a specific item */
+  async priorityRequest(key) {
+    const k = key.toLowerCase();
+    const rec = state.files[k];
+    if (rec && (rec.status === "done" || rec.status === "covered"))
+      return { queued: false, note: "Already has an English subtitle — use “Find alternatives” to swap it." };
+    if (rec) { rec.status = "pending"; rec.attempts = 0; persist(); }
+
+    if (this.phase === "fetching") { prioritySet.add(k); return { queued: true, mode: "next-in-run" }; }
+    if (miniRunning) { prioritySet.add(k); return { queued: true, mode: "queued" }; }
+    miniRunning = true;
+    pushActivity({ ev: "priority", key: k });
+    try {
+      await runFetch(cfg, state, {
+        onlySub: k, saveState: persist,
+        takePriority: () => { const ks = [...prioritySet]; prioritySet.clear(); return ks; },
+        onEvent: (e) => { pushActivity(e); web.broadcast(e); },
+      });
+      return { queued: true, mode: "immediate" };
+    } finally { miniRunning = false; }
+  },
+
   async startScan() {
     if (this.running) throw new Error("engine busy");
     this.running = true; this.phase = "scanning"; this.stopRequested = false;
@@ -84,6 +110,7 @@ const engine = {
         limit, onlySub: only,
         saveState: persist,
         shouldStop: () => this.stopRequested,
+        takePriority: () => { const ks = [...prioritySet]; prioritySet.clear(); return ks; },
         onEvent: (e) => {
           if (e.ev === "item_start") this.current = { key: e.key, label: e.label };
           if (e.ev === "run_end" || e.ev === "quota") this.current = null;
@@ -237,6 +264,55 @@ const api = {
     return { requeued: true };
   },
 
+  async priorityItem(key) {
+    return engine.priorityRequest(key.toLowerCase());
+  },
+
+  /** resolve poster/backdrop/logo art: Jellyfin-style local files first, OMDB fallback */
+  async img(sp) {
+    const key = sp.get("key");
+    const kind = sp.get("kind") === "movie" ? "movie" : "tv";
+    if (!key) return {};
+    const vPath = reconstructPath(key.toLowerCase(), rootPathsOf());
+    const want = sp.get("type") === "backdrop" ? ["backdrop.jpg", "fanart.jpg"]
+               : sp.get("type") === "logo" ? ["logo.png", "clearlogo.png"]
+               : ["poster.jpg", "folder.jpg", "cover.jpg", "default.jpg"];
+
+    const scanForArt = (dir) => {
+      try {
+        const files = fs.readdirSync(dir);
+        for (const wantName of want)
+          for (const f of files)
+            if (f.toLowerCase() === wantName && fs.statSync(path.join(dir, f)).size < 25e6)
+              return path.join(dir, f);
+      } catch {}
+      return null;
+    };
+
+    let dir = path.dirname(vPath);
+    const art = scanForArt(dir) ?? (kind === "tv" ? scanForArt(path.dirname(dir)) : null);
+    if (art) return { file: art };
+
+    // OMDB fallback (needs a free key in config.images.omdbApiKey)
+    const omdbKey = cfg.images?.omdbApiKey;
+    if (!omdbKey) return {};
+    const meta = state.files[key.toLowerCase()]?.meta ?? metaFromKey(key);
+    const title = meta?.show ?? meta?.title;
+    if (!title) return {};
+    const q = `${title.toLowerCase()}|${meta.year ?? ""}|${meta.kind}`;
+    omdbCache ??= loadOmdbCache();
+    if (!(q in omdbCache)) {
+      try {
+        const u = `https://www.omdbapi.com/?apikey=${omdbKey}&t=${encodeURIComponent(title)}${meta.year ? `&y=${meta.year}` : ""}`;
+        const res = await fetch(u, { signal: AbortSignal.timeout(8000) });
+        const j = await res.json();
+        omdbCache[q] = j?.Poster && j.Poster !== "N/A" ? j.Poster : "";
+      } catch { omdbCache[q] = ""; }
+      saveOmdbCacheDebounced();
+    }
+    return omdbCache[q] ? { redirect: omdbCache[q] } : {};
+  },
+
   parkItem(key) {
     const k = key.toLowerCase();
     const rec = state.files[k];
@@ -255,14 +331,16 @@ const api = {
     for (const [k, r] of Object.entries(state.files)) {
       const meta = r.meta ?? metaFromKey(k);
       if (meta.kind === "episode") {
-        const sh = shows.get(meta.show) ?? { show: meta.show, seasons: new Map(), total: 0, covered: 0 };
+        const showName = meta.show || prettyTitle(k.split("/").slice(-2, -1)[0]);
+        const sh = shows.get(showName) ?? { show: showName, seasons: new Map(), total: 0, covered: 0 };
         const season = sh.seasons.get(meta.season) ?? [];
         season.push({ key: k, episode: meta.episode, status: r.status, rel: r.rel ?? null });
         sh.seasons.set(meta.season, season);
         sh.total++; if (r.status === "done" || r.status === "covered") sh.covered++;
-        shows.set(meta.show, sh);
+        shows.set(showName, sh);
       } else {
-        movies.push({ key: k, title: meta.title, year: meta.year ?? null, status: r.status, rel: r.rel ?? null });
+        const title = prettyTitle(meta.title || k.split("/").pop().replace(/\.[^.]+$/, ""));
+        movies.push({ key: k, title, year: meta.year ?? null, status: r.status, rel: r.rel ?? null, hasArt: null });
       }
     }
     if (type === "movie") return { movies: movies.sort((a, b) => (a.title ?? "").localeCompare(b.title ?? "")) };
@@ -303,7 +381,15 @@ const api = {
   },
 
   logs() {
-    return fs.readdirSync(LOG_DIR).filter(f => f.endsWith(".log") || f.endsWith(".out") || f.endsWith(".err")).sort();
+    const files = fs.readdirSync(LOG_DIR)
+      .filter(f => /\.(log|out|err|jsonl)$/i.test(f))
+      .map(f => {
+        let size = 0, mtime = 0;
+        try { const st = fs.statSync(path.join(LOG_DIR, f)); size = st.size; mtime = st.mtimeMs; } catch {}
+        return { file: f, size, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    return files;
   },
 
   tailLog(file, bytes) {
@@ -348,6 +434,7 @@ const api = {
     // merge whitelisted sections only
     const wl = (dst, src, keys) => { for (const k of keys) if (src && k in src) dst[k] = src[k]; };
     wl(cfg, body, ["language", "providers", "maxPerRun", "hearingImpairedOk", "aiTranslatedOk", "attemptsBeforePark", "roots"]);
+    if (body.images) cfg.images = { ...(cfg.images ?? {}), omdbApiKey: body.images.omdbApiKey ?? cfg.images?.omdbApiKey ?? "" };
     if (body.schedule) cfg.schedule = { ...cfg.schedule, ...body.schedule };
     if (body.server) {
       const oldToken = cfg.server.token;
@@ -374,7 +461,17 @@ function mustItem(key) {
   if (!rec) throw new Error("unknown item");
   return { key: k, ...rec };
 }
-function metaFromKey(k) { try { return guessMeta(reconstructPath(k, rootPathsOf())); } catch { return { kind: "movie", title: k.split("/").pop() }; } }
+function metaFromKey(k) {
+  try { return guessMeta(reconstructPath(k, rootPathsOf())); }
+  catch { return { kind: "movie", title: prettyTitle(k.split("/").pop().replace(/\.[^.]+$/, "")) }; }
+}
+function prettyTitle(s) {
+  s = String(s ?? "").replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
+  const num = /^(\d{1,4})[\s._-]+(\S.*)$/.exec(s);
+  if (num && (/^0/.test(num[1]) || num[2].trim().split(/\s+/).length >= 2)) s = num[2];
+  return s.split(" ").map((w, i) =>
+    w.replace(/^([^a-zA-Z]*)([a-zA-Z])(.*)$/, (_, p, c, r) => p + c.toUpperCase() + r)).join(" ");
+}
 async function safeHash(p) { try { return await openSubtitlesHash(p); } catch { return null; } }
 function pick(o, keys) { const out = {}; for (const k of keys) if (o[k] !== undefined) out[k] = o[k]; return out; }
 
@@ -394,6 +491,24 @@ function lanInfo() {
         if (n.family === "IPv4" && !n.internal) { ip = n.address; break; }
   } catch {}
   return { url: `http://${ip}:${cfg.server.port}`, ip, port: cfg.server.port, token: cfg.server.token };
+}
+
+// ---- omdb poster cache ---------------------------------------------------------
+let omdbCache = null;
+let omdbSaveTimer = null;
+function loadOmdbCache() {
+  try { return JSON.parse(fs.readFileSync(path.join(SCRIPT_DIR, "cache", "omdb.json"), "utf8")); }
+  catch { return {}; }
+}
+function saveOmdbCacheDebounced() {
+  clearTimeout(omdbSaveTimer);
+  omdbSaveTimer = setTimeout(() => {
+    try {
+      fs.mkdirSync(path.join(SCRIPT_DIR, "cache"), { recursive: true });
+      fs.writeFileSync(path.join(SCRIPT_DIR, "cache", "omdb.json"), JSON.stringify(omdbCache));
+    } catch {}
+  }, 3000);
+  omdbSaveTimer.unref?.();
 }
 
 // ---- scheduler loop ------------------------------------------------------------

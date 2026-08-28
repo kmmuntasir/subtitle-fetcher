@@ -81,9 +81,15 @@
   </section>
 
   <section id="tab-library" class="tab" hidden>
-    <div class="row"><h3 id="libTitle">TV shows</h3><button id="libToggle" class="ghost">switch to movies</button></div>
+    <div class="row wrap">
+      <div class="seg" id="libTabs">
+        <button data-lib="tv" class="active" id="libTabTv">TV Shows</button>
+        <button data-lib="movie" id="libTabMov">Movies</button>
+      </div>
+      <input id="libSearch" placeholder="Search titles…" style="flex:1;min-width:200px">
+    </div>
     <div id="libShows" class="shows"></div>
-    <div id="libMovies" hidden><table class="grid"><thead><tr><th>title</th><th>year</th><th>status</th><th>release</th></tr></thead><tbody id="libMovieRows"></tbody></table></div>
+    <div id="libMovies" class="cards" hidden></div>
   </section>
 
   <section id="tab-logs" class="tab" hidden>
@@ -107,6 +113,8 @@
       <div class="formrow"><label>API key</label><input id="sOsKey"></div>
       <div class="formrow"><label>Username</label><input id="sOsUser"></div>
       <div class="formrow"><label>Password</label><input id="sOsPass" type="password"></div>
+      <h3>Poster art fallback (optional)</h3>
+      <div class="formrow"><label>OMDB API key</label><input id="sOmdb" placeholder="free key from omdbapi.com"></div>
       <div class="row"><button id="btnSaveSettings" class="primary">Save settings</button><span id="saveMsg" class="muted"></span></div>
     </div>
   </section>
