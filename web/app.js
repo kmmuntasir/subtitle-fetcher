@@ -324,19 +324,19 @@ async function renderLibrary() {
   const q = $("#libSearch").value.trim().toLowerCase();
   if (libMode === "movie") {
     if (!libData.movies.length) libData.movies = (await api("library?type=movie")).movies;
-    const list = q ? libData.movies.filter(m => (m.title ?? "").toLowerCase().includes(q)) : libData.movies;
+    const list = q ? libData.movies.filter(m => (m.label ?? m.title ?? "").toLowerCase().includes(q)) : libData.movies;
     $("#libShows").hidden = true; $("#libMovies").hidden = false;
     $("#libMovies").innerHTML = list.slice(0, 500).map(m => `
       <div class="pcard" data-k="${esc(m.key)}">
         ${artImg(m.key, m.title, "art", "movie")}
-        <div class="meta"><div class="t">${esc(m.title)}</div>
-          <div class="y">${esc(m.year ?? "")}<span class="st ${m.status}" style="margin-left:auto">${m.status === "done" || m.status === "covered" ? "✓" : m.status}</span></div></div>
+        <div class="meta"><div class="t">${esc(m.label ?? m.title)}</div>
+          <div class="y"><span class="st ${m.status}" style="margin-left:auto">${m.status === "done" || m.status === "covered" ? "✓" : m.status}</span></div></div>
       </div>`).join("") + (list.length > 500 ? `<div class="muted">…${list.length - 500} more — refine search</div>` : "");
     bindCardClicks();
     return;
   }
   if (!libData.tv.length) libData.tv = (await api("library?type=tv")).tv;
-  const list = q ? libData.tv.filter(s => s.show.toLowerCase().includes(q)) : libData.tv;
+  const list = q ? libData.tv.filter(x => (x.label ?? x.show).toLowerCase().includes(q)) : libData.tv;
   $("#libMovies").hidden = true; $("#libShows").hidden = false;
   $("#libShows").className = "cards";
   $("#libShows").innerHTML = list.slice(0, 400).map(sh => {
@@ -344,7 +344,7 @@ async function renderLibrary() {
     const anyKey = sh.seasons[0]?.episodes[0]?.key ?? "";
     return `<div class="pcard" data-show="${esc(sh.show)}" data-k="${esc(anyKey)}">
       ${artImg(anyKey, sh.show, "art", "tv")}
-      <div class="meta"><div class="t">${icon("tv")} ${esc(sh.show)}</div>
+      <div class="meta"><div class="t">${icon("tv")} ${esc(sh.label ?? sh.show)}</div>
         <div class="y"><span class="bar" style="display:inline-block;width:52px;height:5px;background:var(--panel2);border-radius:3px;vertical-align:middle"><i style="display:block;height:100%;width:${pct}%;background:var(--ok);border-radius:3px"></i></span> ${sh.covered}/${sh.total}</div></div>
     </div>`;
   }).join("") + (list.length > 400 ? `<div class="muted">…${list.length - 400} more — refine search</div>` : "");

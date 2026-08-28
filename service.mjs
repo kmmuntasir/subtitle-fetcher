@@ -290,21 +290,24 @@ const api = {
     const dirs = kind === "tv" ? [dir, parent, path.dirname(parent)] : [dir];
 
     // poster requests may fall back to a backdrop/fanart — user prefers
-    // "either one" over nothing
+    // "either one" over nothing. Any image container (.jpg/.png/.webp).
+    const IMG_EXTS = [".jpg", ".jpeg", ".png", ".webp"];
     const wantFor = {
-      poster:   ["poster.jpg", "folder.jpg", "cover.jpg", "default.jpg", "backdrop.jpg", "fanart.jpg"],
-      backdrop: ["backdrop.jpg", "fanart.jpg", "poster.jpg", "folder.jpg"],
-      logo:     ["logo.png", "clearlogo.png"],
+      poster:   ["poster", "folder", "cover", "default", "backdrop", "fanart"],
+      backdrop: ["backdrop", "fanart", "poster", "folder"],
+      logo:     ["logo", "clearlogo"],
     }[type];
 
-    const scanForArt = (d, names) => {
-      try {
-        const files = fs.readdirSync(d);
-        for (const wantName of names)
-          for (const f of files)
-            if (f.toLowerCase() === wantName && fs.statSync(path.join(d, f)).size < 25e6)
-              return path.join(d, f);
-      } catch {}
+    const scanForArt = (d, stems) => {
+      let files;
+      try { files = fs.readdirSync(d); } catch { return null; }
+      const lower = files.map(f => f.toLowerCase());
+      for (const stem of stems)
+        for (const ext of IMG_EXTS) {
+          const i = lower.indexOf(stem + ext);
+          if (i >= 0 && fs.statSync(path.join(d, files[i])).size < 25e6)
+            return path.join(d, files[i]);
+        }
       return null;
     };
 
@@ -343,6 +346,11 @@ const api = {
         const isImg = buf.length > 1024 &&
           ((buf[0] === 0xff && buf[1] === 0xd8) || (buf[0] === 0x89 && buf[1] === 0x50));   // JPEG / PNG magic
         if (isImg) { fs.mkdirSync(saveDir, { recursive: true }); fs.writeFileSync(dest, buf); pushActivity({ ev: "art_saved", key: k, file: dest }); }
+        else {
+          delete omdbCache[q];             // dead/expired hotlink — stop serving it
+          saveOmdbCacheDebounced();
+          return {};
+        }
       } catch { /* fall through to redirect */ }
     }
     if (fs.existsSync(dest)) return { file: dest };
@@ -368,23 +376,29 @@ const api = {
       const meta = r.meta ?? metaFromKey(k);
       if (meta.kind === "episode") {
         const showName = prettyTitle(meta.show || k.split("/").slice(-2, -1)[0]);
-        const sh = shows.get(showName) ?? { show: showName, seasons: new Map(), total: 0, covered: 0 };
+        const sh = shows.get(showName) ?? { show: showName, seasons: new Map(), total: 0, covered: 0, from: null, to: null };
         const season = sh.seasons.get(meta.season) ?? [];
         season.push({ key: k, episode: meta.episode, status: r.status, rel: r.rel ?? null });
         sh.seasons.set(meta.season, season);
         sh.total++; if (r.status === "done" || r.status === "covered") sh.covered++;
+        if (meta.from) { sh.from = Math.min(sh.from ?? meta.from, meta.from); sh.to = Math.max(sh.to ?? (meta.to ?? meta.from), meta.to ?? meta.from); }
         shows.set(showName, sh);
       } else {
         const title = prettyTitle(meta.title || k.split("/").pop().replace(/\.[^.]+$/, ""));
-        movies.push({ key: k, title, year: meta.year ?? null, status: r.status, rel: r.rel ?? null, hasArt: null });
+        const label = meta.year ? `${title} (${meta.year})` : title;
+        movies.push({ key: k, title, label, year: meta.year ?? null, status: r.status, rel: r.rel ?? null });
       }
     }
     if (type === "movie") return { movies: movies.sort((a, b) => (a.title ?? "").localeCompare(b.title ?? "")) };
-    const tv = [...shows.values()].map(sh => ({
-      show: sh.show, total: sh.total, covered: sh.covered,
-      seasons: [...sh.seasons.entries()].map(([s, eps]) => ({ season: s, episodes: eps.sort((a, b) => a.episode - b.episode) }))
-        .sort((a, b) => a.season - b.season),
-    })).sort((a, b) => a.show.localeCompare(b.show));
+    const tv = [...shows.values()].map(sh => {
+      const yr = sh.from ? (sh.to && sh.to !== sh.from ? `${sh.from} - ${sh.to}` : `${sh.from}`) : null;
+      return {
+        show: sh.show, label: yr ? `${sh.show} (${yr})` : sh.show, years: yr,
+        total: sh.total, covered: sh.covered,
+        seasons: [...sh.seasons.entries()].map(([s, eps]) => ({ season: s, episodes: eps.sort((a, b) => a.episode - b.episode) }))
+          .sort((a, b) => a.season - b.season),
+      };
+    }).sort((a, b) => a.show.localeCompare(b.show));
     return { tv };
   },
 

@@ -140,3 +140,6 @@ input:focus, select:focus { outline: none; border-color: var(--acc); }
 #modalBody .thumb { width: 96px; aspect-ratio: 2/3; object-fit: cover; border-radius: 8px; background: var(--panel2); }
 .noart.thumb { display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 800; color: #ffffff22; }
 button.danger2:hover { border-color: var(--bad); color: var(--bad); }
+
+/* the hidden attribute ALWAYS wins — fixes .cards/.grid display overrides */
+[hidden] { display: none !important; }
