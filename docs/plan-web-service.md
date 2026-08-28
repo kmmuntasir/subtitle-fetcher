@@ -402,6 +402,14 @@ idle ──scan──► scanning ──► fetching ──► idle
 - Quota handling: OS reads real `remaining` from API; SubDL cap is *estimated*
   (count per UTC-day, corrected when a 403 arrives); Addic7ed gets cooldown
   state after 429/503. All surfaced to `/status`.
+  **Observed in production (2026-08-28):** SubDL enforces its ~300/day cap as a
+  *silent soft block* — after ~272 downloads the search endpoint serves
+  HTTP-200 pages with result lists stripped, so misses look like "no subtitles
+  exist" rather than errors (isolated probes still work fine). Engine rule for
+  Phase 1: a streak of ≥40 zero-result sd searches after ≥100 downloads today
+  ⇒ treat sd as quota-exhausted, park it for the UTC day, keep other providers
+  running. Items "missed" during a soft block must not burn attempt counters —
+  retroactively un-count them when the block is detected.
 - Catch-up semantics identical to the schtasks `StartWhenAvailable` fix: if the
   scheduled slot was missed while powered off, run once on next boot.
 - **Cancellation** checks between items; state saves every ≤5 items (existing
