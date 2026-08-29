@@ -75,6 +75,8 @@ const parseCases = [
    { kind: "episode", show: "Breaking Bad", season: 1, episode: 5 }],
   ["//nas/videos/tv series/Captain Planet And The Planeteers Complete/captain.planet.and.the.planeteers.complete.s02.480p.amzn.webrip/captain.planet.and.the.planeteers.s02e22.mkv",
    { kind: "episode", show: "Captain Planet And The Planeteers", season: 2, episode: 22 }],
+  ["//nas/videos/tv series/Avatar The Last Airbender 2005/season 1/avatar the last airbender - s01e19.mkv",
+   { kind: "episode", show: "Avatar The Last Airbender", season: 1, episode: 19 }],
   ["//nas/Videos/Movies/Up (2009) [1080p]/Up.2009.1080p.BluRay.x264.YIFY.mp4",
    { kind: "movie", title: "Up", year: 2009 }],
   ["//nas/Videos/Movies/1 (2020) [720p] [WEBRip] [YTS.MX]/1.2020.720p.WEBRip.x264.AAC-[YTS.MX].mp4",

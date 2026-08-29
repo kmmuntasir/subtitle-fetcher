@@ -60,7 +60,7 @@ const engine = {
     const rec = state.files[k];
     if (rec && (rec.status === "done" || rec.status === "covered"))
       return { queued: false, note: "Already has an English subtitle — use “Find alternatives” to swap it." };
-    if (rec) { rec.status = "pending"; rec.attempts = 0; persist(); }
+    if (rec) { rec.status = "pending"; rec.attempts = 0; delete rec.a7miss; persist(); }
 
     if (this.phase === "fetching") { prioritySet.add(k); return { queued: true, mode: "next-in-run" }; }
     prioritySet.add(k);
@@ -602,6 +602,7 @@ function saveOmdbCacheDebounced() {
 let lastScheduledDay = state.lastRunDate ?? null;
 let lastTvRunEnd = 0;          // when the last tv247 run finished (or was reserved)
 let lastTvRunDone = 0;         // downloads it achieved — drives the backoff below
+let lastTvRunStopped = false;  // ended by the catastrophic breaker
 setInterval(async () => {
   if (!cfg.schedule?.enabled || engine.running || miniRunning || prioritySet.size > 0) return;
   const now = new Date();
@@ -630,15 +631,20 @@ setInterval(async () => {
     try { await engine.startScan(); } catch (e) { console.error("[scheduler] scan:", e.message); }
     return;
   }
-  if (Date.now() - lastTvRunEnd < (lastTvRunDone > 0 ? 30e3 : 3 * 3600e3)) return;
+  // productive run → chain in 30 s; breaker-tripped run → it made progress
+  // (skipped items are marked), continue in 2 min; nothing left to do → 3 h
+  const idleFor = Date.now() - lastTvRunEnd;
+  if (idleFor < (lastTvRunDone > 0 ? 30e3 : lastTvRunStopped ? 2 * 60e3 : 3 * 3600e3)) return;
   lastTvRunEnd = Date.now();
   console.log("[scheduler] tv247: starting addic7ed-only TV run");
   try {
-    const r = await engine.startRun(null, "/tv series/", { skipRescan: true, providers: ["a7"] });
+    const r = await engine.startRun(null, "/tv series/", { skipRescan: true, providers: ["a7"], skipA7MissedToday: true });
     lastTvRunDone = r?.done ?? 0;
+    lastTvRunStopped = !!r?.stopped;
   } catch (e) {
     console.error("[scheduler] tv247:", e.message);
     lastTvRunDone = 0;
+    lastTvRunStopped = false;
   }
   void mm;
 }, 30000).unref();
