@@ -169,6 +169,17 @@ const engine = {
 };
 
 // ---- API implementation ------------------------------------------------------
+/** human display name for a queue row: cached meta when present, otherwise a
+ *  full parse of the reconstructed path — never the lowercased key itself */
+function queueLabel(k, r) {
+  const meta = r.meta ?? metaFromKey(k);
+  if (meta?.kind === "episode" && meta.show && meta.show !== "$1") {
+    return `${prettyTitle(meta.show)} · S${String(meta.season).padStart(2, "0")}E${String(meta.episode).padStart(2, "0")}`;
+  }
+  const title = prettyTitle(meta?.title || decodeURIComponent(k.split("/").pop().replace(/\.[^.]+$/, "")));
+  return meta?.year ? `${title} (${meta.year})` : title;
+}
+
 const api = {
   async status() {
     const s = summary(state);
@@ -228,7 +239,7 @@ const api = {
     rows = rows.slice((page - 1) * per, page * per);
     return {
       total, page, per,
-      items: rows.map(([k, r]) => ({ key: k, ...pick(r, ["status", "attempts", "lastError", "provider", "rel", "when", "meta", "rootType"]) })),
+      items: rows.map(([k, r]) => ({ key: k, name: queueLabel(k, r), ...pick(r, ["status", "attempts", "lastError", "provider", "rel", "when", "meta", "rootType"]) })),
     };
   },
 

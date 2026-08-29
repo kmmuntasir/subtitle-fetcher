@@ -233,16 +233,24 @@ async function loadQueue() {
     q: $("#qSearch").value.trim(), page: qPage, per: 60,
   });
   const d = await api("queue?" + sp);
-  $("#qCount").textContent = `${d.total} items`;
+  $("#qCount").textContent = `${d.total.toLocaleString()} items`;
+  const y = window.scrollY;
   $("#qTable tbody").innerHTML = d.items.map(it => `<tr>
     <td>${chip(it.status)}</td>
-    <td class="path">${esc(it.key.split("/").slice(-2).join("/"))}</td>
+    <td>${esc(it.name ?? it.key.split("/").slice(-2).join("/"))}</td>
     <td class="path">${esc(it.rel ?? it.lastError ?? "")}</td>
     <td>${it.attempts ?? 0}</td>
-    <td><button data-k="${esc(it.key)}" class="ghost qitem">detail</button></td>
+    <td><button data-k="${esc(it.key)}" class="ghost qitem">Detail</button></td>
   </tr>`).join("");
   $$("#qTable .qitem").forEach(b => b.onclick = () => itemModal(b.dataset.k));
+  window.scrollTo(0, y);
 }
+// keep the queue list current while its tab is open (statuses shift on every
+// engine event); preserves filters, page and scroll position
+setInterval(() => {
+  if (!$("#tab-queue") || $("#tab-queue").hidden) return;
+  loadQueue().catch(() => {});
+}, 10000);
 
 async function itemModal(key, backShow = null) {
   const it = await api("items/" + encodeURIComponent(key));
