@@ -213,6 +213,7 @@ const api = {
         lastResult: engine.lastResult,
         nextRun: cfg.schedule?.enabled ? nextRunDescription() : null,
       },
+      nextFetch: nextFetchInfo(),
       providers: provs,
       sdDownloadsToday: state.sdDay === new Date().toISOString().slice(0, 10) ? state.sdCount ?? 0 : 0,
       scannedAt: state.scannedAt ? new Date(state.scannedAt).toISOString() : null,
@@ -594,6 +595,32 @@ function metaFromKey(k) {
   try { return guessMeta(reconstructPath(k, rootPathsOf())); }
   catch { return { kind: "movie", title: prettyTitle(k.split("/").pop().replace(/\.[^.]+$/, "")) }; }
 }
+/** when will the next fetch happen? mirrors the scheduler's own backoff math
+ *  so the dashboard countdown matches reality */
+function nextFetchInfo() {
+  if (engine.fetching || miniRunning) return { running: true };
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const [hh, mm] = (cfg.schedule?.time ?? "13:05").split(":").map(Number);
+  const tv247On = cfg.schedule?.enabled !== false && cfg.schedule?.tv247 !== false;
+  const candidates = [];
+  // a due-but-not-yet-started daily run fires on the next 30 s tick
+  const dueNow = (now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm)) && lastScheduledDay !== today;
+  if (cfg.schedule?.enabled !== false && dueNow) candidates.push({ at: now.toISOString(), kind: "daily catch-up" });
+  if (tv247On) {
+    const backoff = lastTvRunDone > 0 ? 30e3 : lastTvRunStopped ? 2 * 60e3 : 3 * 3600e3;
+    // fresh boot (never run): the next 30 s tick fires it
+    const tvAt = lastTvRunEnd === 0 ? Date.now() + 30e3 : lastTvRunEnd + backoff;
+    candidates.push({ at: new Date(tvAt).toISOString(), kind: "tv247 cycle" });
+  }
+  const dailyAt = new Date(now);
+  dailyAt.setHours(hh, mm, 0, 0);
+  if (dailyAt <= now || lastScheduledDay === today) dailyAt.setDate(dailyAt.getDate() + 1);
+  candidates.push({ at: dailyAt.toISOString(), kind: "daily run" });
+  candidates.sort((a, b) => new Date(a.at) - new Date(b.at));
+  return candidates[0];
+}
+
 function prettyTitle(s) {
   s = String(s ?? "").replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
   const num = /^(\d{1,4})[\s._-]+(\S.*)$/.exec(s);

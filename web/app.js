@@ -38,7 +38,23 @@ addEventListener("hashchange", () => showTab(location.hash.slice(2) || "dashboar
 
 // ---- dashboard -------------------------------------------------------------------
 let lastChartKey = "";
+let nextFetchSt = null, dashRunning = false;
+function renderNextFetch() {
+  const el = $("#nextFetch"); if (!el) return;
+  if (dashRunning) { el.textContent = "fetch running"; return; }
+  if (!nextFetchSt || nextFetchSt.running) { el.textContent = ""; return; }
+  const ms = new Date(nextFetchSt.at).getTime() - Date.now();
+  if (ms <= 0) { el.textContent = `starting ${nextFetchSt.kind}…`; return; }
+  const s = Math.floor(ms / 1000);
+  const hh = String(Math.floor(s / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  el.textContent = `next fetch (${nextFetchSt.kind}) in ${hh}:${mm}:${ss}`;
+}
+setInterval(renderNextFetch, 1000);
 function renderDashboard(st) {
+  nextFetchSt = st.nextFetch ?? null;
+  dashRunning = st.engine.running;
   $("#engineDot").className = "dot " + (st.engine.running ? "busy" : "on");
   $("#enginePhase").textContent = st.engine.running ? st.engine.phase + (st.engine.current ? " · " + st.engine.current.label : "") : "idle";
   $("#btnStop").hidden = !st.engine.running;
