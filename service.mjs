@@ -109,8 +109,12 @@ const engine = {
       });
       persist();
       const s = summary(state);
-      pushActivity({ ev: "scan", ...s, total: r.total });
-      web.broadcast({ ev: "scan", ...s, total: r.total });
+      pushActivity({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0 });
+      web.broadcast({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0 });
+    } catch (e) {
+      console.error("[scan] failed:", e.message);
+      pushActivity({ ev: "error", message: `scan failed: ${e.message}` });
+      web.broadcast({ ev: "error", message: `scan failed: ${e.message}` });
     } finally {
       this.running = false; this.phase = "idle"; this.current = null;
     }
@@ -619,6 +623,13 @@ setInterval(async () => {
   // downloads nothing we back off 3 h — provider misses must not hot-cycle
   // into parking.
   if (cfg.schedule?.tv247 === false) return;
+
+  // a stale inventory gets scanned first — tv247 runs skip rescanning by design
+  if (!state.scannedAt || Date.now() - state.scannedAt > 20 * 3600e3) {
+    console.log("[scheduler] inventory stale — scanning before tv247 cycle");
+    try { await engine.startScan(); } catch (e) { console.error("[scheduler] scan:", e.message); }
+    return;
+  }
   if (Date.now() - lastTvRunEnd < (lastTvRunDone > 0 ? 30e3 : 3 * 3600e3)) return;
   lastTvRunEnd = Date.now();
   console.log("[scheduler] tv247: starting addic7ed-only TV run");
