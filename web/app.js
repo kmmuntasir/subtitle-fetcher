@@ -38,14 +38,21 @@ addEventListener("hashchange", () => showTab(location.hash.slice(2) || "dashboar
 
 // ---- dashboard -------------------------------------------------------------------
 let lastChartKey = "";
-let nextFetchSt = null, dashRunning = false;
+let nextFetchSt = null, dashRunning = false, dashCurrent = "";
 function renderNextFetch() {
   const el = $("#nextFetch"); if (!el) return;
   if (dashRunning) {
     // inside a run: count down to the next item using the engine's pace
     if (nextFetchSt?.fetchPace?.nextItemAt) {
       const ms = new Date(nextFetchSt.fetchPace.nextItemAt).getTime() - Date.now();
-      el.textContent = ms <= 0 ? "next item due now…" : `next item in 00:${String(Math.floor(ms / 1000)).padStart(2, "0")}`;
+      if (ms <= 0) {
+        // occasional items take much longer (retries, cooldowns) — say so
+        // instead of a countdown stuck at zero
+        const cur = dashCurrent.split("/").pop().slice(0, 34);
+        el.textContent = cur ? `working — ${cur}…` : "working on the current item…";
+        return;
+      }
+      el.textContent = `next item in 00:${String(Math.floor(ms / 1000)).padStart(2, "0")}`;
       return;
     }
     el.textContent = "fetch running";
@@ -64,6 +71,7 @@ setInterval(renderNextFetch, 1000);
 function renderDashboard(st) {
   nextFetchSt = st.nextFetch ?? null;
   dashRunning = st.engine.running;
+  dashCurrent = st.engine.current?.label ?? "";
   $("#engineDot").className = "dot " + (st.engine.running ? "busy" : "on");
   $("#enginePhase").textContent = st.engine.running ? st.engine.phase + (st.engine.current ? " · " + st.engine.current.label : "") : "idle";
   $("#btnStop").hidden = !st.engine.running;
