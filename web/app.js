@@ -127,7 +127,7 @@ const chip = (s) => `<span class="st ${s}">${fmtStatus(s)}</span>`;
 const fmtOutcome = (o) => ({ kept: "Kept", replaced: "Replaced", rejected: "Rejected" }[o] ?? o ?? "");
 const field = (label, value) => value ? `<div class="f"><span>${label}</span><b>${value}</b></div>` : "";
 function renderEvent(e) {
-  const t = (e.t ?? new Date().toISOString()).slice(11, 19);
+  const t = new Date(e.t ?? Date.now()).toLocaleTimeString("en-GB", { hour12: false });   // viewer-local
   if (e.line) return `<span class="miss">${esc(t)} ${esc(e.line)}</span>`;
   switch (e.ev) {
     case "item_start": return `${esc(t)} Searching — ${esc(e.label ?? e.key)}`;
