@@ -115,7 +115,7 @@ const engine = {
       this.running = false; this.phase = "idle"; this.current = null;
     }
   },
-  async startRun(limit = null, only = "") {
+  async startRun(limit = null, only = "", runOpts = {}) {
     if (this.running || miniRunning) throw new Error("engine busy");
     this.running = true; this.phase = "fetching"; this.stopRequested = false;
     this.startedAt = Date.now();
@@ -123,6 +123,7 @@ const engine = {
     try {
       const result = await runFetch(cfg, state, {
         limit, onlySub: only,
+        ...runOpts,
         saveState: persist,
         shouldStop: () => this.stopRequested,
         takePriority: () => { const ks = [...prioritySet]; prioritySet.clear(); return ks; },
@@ -595,20 +596,38 @@ function saveOmdbCacheDebounced() {
 
 // ---- scheduler loop ------------------------------------------------------------
 let lastScheduledDay = state.lastRunDate ?? null;
+let lastTvRunEnd = 0;          // when the last tv247 run finished (or was reserved)
+let lastTvRunDone = 0;         // downloads it achieved — drives the backoff below
 setInterval(async () => {
-  if (!cfg.schedule?.enabled || engine.running) return;
+  if (!cfg.schedule?.enabled || engine.running || miniRunning || prioritySet.size > 0) return;
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   const [hh, mm] = (cfg.schedule?.time ?? "13:05").split(":").map(Number);
   const due = now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
-  if (!due || lastScheduledDay === today) return;
-  const catchUp = cfg.schedule?.catchUpIfMissed !== false;
-  const missedBoot = catchUp && lastScheduledDay !== today && now.getHours() < (hh + 2);   // boot shortly after slot
-  if (now.getHours() === hh || now.getHours() === hh || missedBoot || true) {
-    // daily slot reached (or catch-up after boot); run once per day
+
+  // ---- daily full run (all providers; movies ride SubDL's daily quota) ----
+  if (due && lastScheduledDay !== today) {
     lastScheduledDay = today;
     console.log(`[scheduler] daily run starting (${cfg.schedule.time})`);
     try { await engine.startRun(); } catch (e) { console.error("[scheduler]", e.message); }
+    return;
+  }
+
+  // ---- tv247: keep addic7ed chewing TV around the clock --------------------
+  // a7 is uncapped but human-paced; sd stays out of these runs so its daily
+  // quota is reserved for the movies at the scheduled slot. When a cycle
+  // downloads nothing we back off 3 h — provider misses must not hot-cycle
+  // into parking.
+  if (cfg.schedule?.tv247 === false) return;
+  if (Date.now() - lastTvRunEnd < (lastTvRunDone > 0 ? 30e3 : 3 * 3600e3)) return;
+  lastTvRunEnd = Date.now();
+  console.log("[scheduler] tv247: starting addic7ed-only TV run");
+  try {
+    const r = await engine.startRun(null, "/tv series/", { skipRescan: true, providers: ["a7"] });
+    lastTvRunDone = r?.done ?? 0;
+  } catch (e) {
+    console.error("[scheduler] tv247:", e.message);
+    lastTvRunDone = 0;
   }
   void mm;
 }, 30000).unref();
