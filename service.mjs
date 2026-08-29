@@ -14,7 +14,7 @@ import { openLog, closeLog, setLogHook, GRN, YEL, DIM } from "./lib/logger.mjs";
 import { refreshInventory, refreshInventoryAsync } from "./lib/scanner.mjs";
 import { guessMeta } from "./lib/parse.mjs";
 import { openSubtitlesHash } from "./lib/hash.mjs";
-import { runFetch } from "./lib/engine.mjs";
+import { runFetch, fetchPace } from "./lib/engine.mjs";
 import { buildProviders } from "./lib/providers/index.mjs";
 import { WebServer, newToken } from "./lib/webserver.mjs";
 import { reconstructPath, norm } from "./lib/utils.mjs";
@@ -214,6 +214,9 @@ const api = {
         nextRun: cfg.schedule?.enabled ? nextRunDescription() : null,
       },
       nextFetch: nextFetchInfo(),
+      fetchPace: engine.fetching && fetchPace.lastAt && fetchPace.avgMs
+        ? { nextItemAt: new Date(fetchPace.lastAt + fetchPace.avgMs).toISOString(), avgMs: fetchPace.avgMs }
+        : null,
       providers: provs,
       sdDownloadsToday: state.sdDay === new Date().toISOString().slice(0, 10) ? state.sdCount ?? 0 : 0,
       scannedAt: state.scannedAt ? new Date(state.scannedAt).toISOString() : null,

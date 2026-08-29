@@ -41,7 +41,16 @@ let lastChartKey = "";
 let nextFetchSt = null, dashRunning = false;
 function renderNextFetch() {
   const el = $("#nextFetch"); if (!el) return;
-  if (dashRunning) { el.textContent = "fetch running"; return; }
+  if (dashRunning) {
+    // inside a run: count down to the next item using the engine's pace
+    if (nextFetchSt?.fetchPace?.nextItemAt) {
+      const ms = new Date(nextFetchSt.fetchPace.nextItemAt).getTime() - Date.now();
+      el.textContent = ms <= 0 ? "next item due now…" : `next item in 00:${String(Math.floor(ms / 1000)).padStart(2, "0")}`;
+      return;
+    }
+    el.textContent = "fetch running";
+    return;
+  }
   if (!nextFetchSt || nextFetchSt.running) { el.textContent = ""; return; }
   const ms = new Date(nextFetchSt.at).getTime() - Date.now();
   if (ms <= 0) { el.textContent = `starting ${nextFetchSt.kind}…`; return; }
