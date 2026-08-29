@@ -115,7 +115,12 @@ try {
   es.onmessage = (m) => {
     let e; try { e = JSON.parse(m.data); } catch { return; }
     if (e.ev === "hello") return;
-    if (e.ev === "status") { renderDashboard(e.data); return; }   // live tile updates
+    if (e.ev === "status") {
+      renderDashboard(e.data);
+      const qTab = $("#tab-queue");
+      if (qTab && !qTab.hidden && lastQueuePending !== null && e.data.totals.pending !== lastQueuePending) loadQueue().catch(() => {});
+      return;
+    }
     feedAppend(renderEvent(e));
   };
 } catch { /* SSE optional */ }
@@ -227,17 +232,20 @@ $("#btnQGo").onclick = () => { qPage = 1; loadQueue(); };
 $("#qPrev").onclick = () => { qPage = Math.max(1, qPage - 1); loadQueue(); };
 $("#qNext").onclick = () => { qPage++; loadQueue().catch(() => qPage--); };
 
+let lastQueuePending = null;
 async function loadQueue() {
   const sp = new URLSearchParams({
     status: $("#qStatus").value, type: $("#qType").value,
     q: $("#qSearch").value.trim(), page: qPage, per: 60,
   });
   const d = await api("queue?" + sp);
-  $("#qCount").textContent = `${d.total.toLocaleString()} items`;
+  lastQueuePending = d.total;
+  $("#qCount").textContent = `${d.queueLen.toLocaleString()} in queue · ${d.total.toLocaleString()} shown`;
   const y = window.scrollY;
-  $("#qTable tbody").innerHTML = d.items.map(it => `<tr>
+  $("#qTable tbody").innerHTML = d.items.map(it => `<tr${it.n === 1 ? ' class="next"' : ""}>
+    <td class="qnum">${it.n ? "#" + it.n : "—"}</td>
     <td>${chip(it.status)}</td>
-    <td>${esc(it.name ?? it.key.split("/").slice(-2).join("/"))}</td>
+    <td>${esc(it.name ?? it.key.split("/").slice(-2).join("/"))}${it.n === 1 ? ' <span class="warn2">▶ next</span>' : ""}</td>
     <td class="path">${esc(it.rel ?? it.lastError ?? "")}</td>
     <td>${it.attempts ?? 0}</td>
     <td><button data-k="${esc(it.key)}" class="ghost qitem">Detail</button></td>
@@ -245,8 +253,8 @@ async function loadQueue() {
   $$("#qTable .qitem").forEach(b => b.onclick = () => itemModal(b.dataset.k));
   window.scrollTo(0, y);
 }
-// keep the queue list current while its tab is open (statuses shift on every
-// engine event); preserves filters, page and scroll position
+// realtime queue: the SSE status snapshot carries fresh totals — re-pull the
+// list when the serviceable queue size changes while the tab is open
 setInterval(() => {
   if (!$("#tab-queue") || $("#tab-queue").hidden) return;
   loadQueue().catch(() => {});

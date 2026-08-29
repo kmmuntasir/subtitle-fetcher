@@ -235,16 +235,25 @@ const api = {
     const q = (sp.get("q") ?? "").toLowerCase();
     const page = Math.max(1, +sp.get("page") || 1);
     const per = Math.min(200, +sp.get("per") || 50);
+    // serial numbers mirror the engine's actual fetch order: priority
+    // requests first, then fewest attempts, then scan/insertion order —
+    // numbered over the serviceable queue (pending + failed) only
+    const prio = new Set(prioritySet);
+    const qOrder = Object.entries(state.files)
+      .filter(([, r]) => r.status === "pending" || r.status === "failed")
+      .sort((a, b) => (prio.has(a[0]) ? 0 : 1) - (prio.has(b[0]) ? 0 : 1) || (a[1].attempts ?? 0) - (b[1].attempts ?? 0));
+    const seq = new Map(qOrder.map(([k], i) => [k, i + 1]));
     let rows = Object.entries(state.files);
     if (status) rows = rows.filter(([, r]) => r.status === status);
     if (type) rows = rows.filter(([, r]) => (r.meta?.kind ?? "") === type || (r.rootType ?? "") === type);
     if (q) rows = rows.filter(([k]) => k.includes(q));
-    rows.sort((a, b) => (a[1].status === "pending" ? 0 : 1) - (b[1].status === "pending" ? 0 : 1) || a[0].localeCompare(b[0]));
+    rows.sort((a, b) => (seq.get(a[0]) ?? Infinity) - (seq.get(b[0]) ?? Infinity));
     const total = rows.length;
-    rows = rows.slice((page - 1) * per, page * per);
+    const offset = (page - 1) * per;
+    rows = rows.slice(offset, offset + per);
     return {
-      total, page, per,
-      items: rows.map(([k, r]) => ({ key: k, name: queueLabel(k, r), ...pick(r, ["status", "attempts", "lastError", "provider", "rel", "when", "meta", "rootType"]) })),
+      total, page, per, queueLen: qOrder.length,
+      items: rows.map(([k, r]) => ({ n: seq.get(k) ?? null, key: k, name: queueLabel(k, r), ...pick(r, ["status", "attempts", "lastError", "provider", "rel", "when", "meta", "rootType"]) })),
     };
   },
 
