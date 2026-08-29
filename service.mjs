@@ -111,13 +111,21 @@ const engine = {
     // yield so the HTTP response for POST /scan goes out before the heavy walk
     await new Promise(r => setTimeout(r, 30));
     try {
+      // stream the walk into the feed (throttled — a full pass touches
+      // thousands of directories and would flood it otherwise)
+      let lastWalkEmit = 0;
+      const emitWalk = (label, samplePath) => {
+        this.current = { label };
+        const now = Date.now();
+        if (now - lastWalkEmit < 2500) return;
+        lastWalkEmit = now;
+        pushEvent({ ev: "scan_walk", path: samplePath });
+      };
       const r = await refreshInventoryAsync(cfg, state, {
+        onWalk: (dir, files) => emitWalk(`walking · ${files} videos found`, dir),
         onProgress: (n, total, sample) => {
-          this.current = { label: `scanning ${n}/${total}` };
-          if (n % 3000 === 0) {
-            pushEvent({ ev: "scan_progress", n, total });
-          }
-          void sample;
+          emitWalk(`scanning ${n}/${total}`, sample);
+          if (n % 3000 === 0) pushEvent({ ev: "scan_progress", n, total });
         },
       });
       persist();

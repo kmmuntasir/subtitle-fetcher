@@ -138,6 +138,10 @@ function renderEvent(e) {
     case "priority": return `<span class="warn2">${esc(t)} Priority requested — ${esc(e.key.split("/").pop())}</span>`;
     case "scan": return `<span class="warn2">${esc(t)} Scan complete — ${e.total ?? "?"} videos, ${e.pending ?? "?"} pending</span>`;
     case "scan_start": return `${esc(t)} Scan started — walking the library…`;
+    case "scan_walk": {
+      const segs = String(e.path ?? "").split(/[\\/]+/).filter(Boolean);
+      return `${esc(t)} Scanning — …${esc(segs.slice(-3).join(" › "))}`;
+    }
     case "scan_progress": return `${esc(t)} Scan — ${e.n ?? "?"}/${e.total ?? "?"} files`;
     case "streak_stop": return `<span class="warn2">${esc(t)} Run paused — ${e.misses ?? "?"} misses in a row; retrying after backoff</span>`;
     case "park": return `<span class="miss">${esc(t)} Parked — ${esc((e.key ?? "").split("/").pop())}</span>`;
