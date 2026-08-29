@@ -137,10 +137,20 @@ function renderEvent(e) {
     case "replace": return `<span class="dl">${esc(t)} Subtitle replaced — ${esc(e.key.split("/").pop())} → ${esc(e.release)}</span>`;
     case "priority": return `<span class="warn2">${esc(t)} Priority requested — ${esc(e.key.split("/").pop())}</span>`;
     case "scan": return `<span class="warn2">${esc(t)} Scan complete — ${e.total ?? "?"} videos, ${e.pending ?? "?"} pending</span>`;
+    case "scan_start": return `${esc(t)} Scan started — walking the library…`;
+    case "scan_progress": return `${esc(t)} Scan — ${e.n ?? "?"}/${e.total ?? "?"} files`;
+    case "streak_stop": return `<span class="warn2">${esc(t)} Run paused — ${e.misses ?? "?"} misses in a row; retrying after backoff</span>`;
+    case "park": return `<span class="miss">${esc(t)} Parked — ${esc((e.key ?? "").split("/").pop())}</span>`;
+    case "error": return `<span class="warn2">${esc(t)} Error — ${esc(e.message ?? e.detail ?? "")}</span>`;
+    case "config": return `${esc(t)} Settings updated`;
+    case "art_saved": return `${esc(t)} Poster saved into library`;
     case "run_start": return `<span class="warn2">${esc(t)} Run started — ${e.queue} items queued</span>`;
     case "run_end": return `<span class="warn2">${esc(t)} Run finished — ${e.done} downloaded, ${e.missed} unmatched</span>`;
     case "log": return esc(t) + " " + esc(e.line ?? "");
-    default: return esc(t) + " " + esc(JSON.stringify(e).slice(0, 160));
+    default: {
+      const name = String(e.ev ?? "event").replace(/_/g, " ");
+      return `${esc(t)} ${name.charAt(0).toUpperCase() + name.slice(1)}`;
+    }
   }
 }
 
