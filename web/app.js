@@ -37,8 +37,8 @@ function showTab(name) {
 addEventListener("hashchange", () => showTab(location.hash.slice(2) || "dashboard"));
 
 // ---- dashboard -------------------------------------------------------------------
-async function loadDashboard() {
-  const st = await api("status");
+let lastChartKey = "";
+function renderDashboard(st) {
   $("#engineDot").className = "dot " + (st.engine.running ? "busy" : "on");
   $("#enginePhase").textContent = st.engine.running ? st.engine.phase + (st.engine.current ? " · " + st.engine.current.label : "") : "idle";
   $("#btnStop").hidden = !st.engine.running;
@@ -62,8 +62,14 @@ async function loadDashboard() {
   if (st.scannedAt) $("#lastRun").textContent += ` · scan ${st.scannedAt.slice(0, 16).replace("T", " ")}`;
   if (st.lan) $("#lanUrl").innerHTML = `<a href="${esc(st.lan.url)}/?token=${encodeURIComponent(st.lan.token)}">${esc(st.lan.url)}</a>`;
 
+  // re-pull the 14-day chart only when the covered count actually moved
+  const ck = `${t.covered}/${t.total}`;
+  if (ck !== lastChartKey) { lastChartKey = ck; loadChart().catch(() => {}); }
+}
+async function loadDashboard() {
+  const st = await api("status");
+  renderDashboard(st);
   if (!feedEl.dataset.backfilled) { feedEl.dataset.backfilled = "1"; feedBackfill(); }
-  loadChart().catch(() => {});
 }
 async function loadChart() {
   const r = await api("report?days=14");
@@ -109,6 +115,7 @@ try {
   es.onmessage = (m) => {
     let e; try { e = JSON.parse(m.data); } catch { return; }
     if (e.ev === "hello") return;
+    if (e.ev === "status") { renderDashboard(e.data); return; }   // live tile updates
     feedAppend(renderEvent(e));
   };
 } catch { /* SSE optional */ }

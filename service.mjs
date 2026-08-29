@@ -46,6 +46,21 @@ setLogHook((_msg, plain) => pushActivity({ ev: "log", line: plain.slice(0, 200) 
 const prioritySet = new Set();       // keys the user wants fetched next
 let miniRunning = false;             // scoped single-item fetch (runs alongside scans)
 
+// every engine event also carries a (throttled) status snapshot over SSE so
+// the dashboard's count cards update in real time without polling
+let lastStatusBroadcast = 0;
+function broadcastStatus(force = false) {
+  const now = Date.now();
+  if (!force && now - lastStatusBroadcast < 2000) return;
+  lastStatusBroadcast = now;
+  Promise.resolve(api.status()).then(st => web.broadcast({ ev: "status", data: st })).catch(() => {});
+}
+function pushEvent(e) {
+  pushActivity(e);
+  web.broadcast(e);
+  broadcastStatus();
+}
+
 const engine = {
   running: false, stopRequested: false,
   lastResult: null, startedAt: null, phase: "idle",        // idle|scanning|fetching
@@ -80,7 +95,7 @@ const engine = {
           pushActivity({ ev: "priority", key: k });
           await runFetch(cfg, state, {
             onlySub: k, saveState: persist, skipRescan: true,
-            onEvent: (e) => { pushActivity(e); web.broadcast(e); },
+            onEvent: (e) => pushEvent(e),
           });
         }
       } catch (err) {
@@ -92,8 +107,7 @@ const engine = {
   async startScan() {
     if (this.running) throw new Error("engine busy");
     this.running = true; this.phase = "scanning"; this.stopRequested = false;
-    pushActivity({ ev: "scan_start" });
-    web.broadcast({ ev: "scan_start" });
+    pushEvent({ ev: "scan_start" });
     // yield so the HTTP response for POST /scan goes out before the heavy walk
     await new Promise(r => setTimeout(r, 30));
     try {
@@ -101,20 +115,17 @@ const engine = {
         onProgress: (n, total, sample) => {
           this.current = { label: `scanning ${n}/${total}` };
           if (n % 3000 === 0) {
-            pushActivity({ ev: "scan_progress", n, total });
-            web.broadcast({ ev: "scan_progress", n, total });
+            pushEvent({ ev: "scan_progress", n, total });
           }
           void sample;
         },
       });
       persist();
       const s = summary(state);
-      pushActivity({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0 });
-      web.broadcast({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0 });
+      pushEvent({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0 });
     } catch (e) {
       console.error("[scan] failed:", e.message);
-      pushActivity({ ev: "error", message: `scan failed: ${e.message}` });
-      web.broadcast({ ev: "error", message: `scan failed: ${e.message}` });
+      pushEvent({ ev: "error", message: `scan failed: ${e.message}` });
     } finally {
       this.running = false; this.phase = "idle"; this.current = null;
     }
@@ -134,8 +145,7 @@ const engine = {
         onEvent: (e) => {
           if (e.ev === "item_start") this.current = { key: e.key, label: e.label };
           if (e.ev === "run_end" || e.ev === "quota") this.current = null;
-          pushActivity(e);
-          web.broadcast(e);
+          pushEvent(e);
         },
       });
       this.lastResult = { ...result, at: new Date().toISOString() };
@@ -270,8 +280,7 @@ const api = {
     rec.when = new Date().toISOString();
     state.files[listing.key] = rec;
     persist();
-    pushActivity({ ev: "replace", key: listing.key, provider: cand.provider, release: rec.rel });
-    web.broadcast({ ev: "replace", key: listing.key, release: rec.rel });
+    pushEvent({ ev: "replace", key: listing.key, provider: cand.provider, release: rec.rel });
     return { swapped: true, file: dest, backup: prev, release: rec.rel };
   },
 
@@ -384,7 +393,7 @@ const api = {
     rec.status = rec.status === "parked" ? "pending" : "parked";
     rec.attempts = rec.status === "pending" ? 0 : rec.attempts;
     persist();
-    pushActivity({ ev: "park", key: k, status: rec.status });
+    pushEvent({ ev: "park", key: k, status: rec.status });
     return { status: rec.status };
   },
 
@@ -534,7 +543,7 @@ const api = {
       if (body.opensubtitles.password && body.opensubtitles.password !== "•••") cfg.password = body.opensubtitles.password;
     }
     persistCfg();
-    pushActivity({ ev: "config", detail: "updated via UI" });
+    pushEvent({ ev: "config", detail: "updated via UI" });
     return { saved: true };
   },
 };
@@ -604,6 +613,7 @@ let lastTvRunEnd = 0;          // when the last tv247 run finished (or was reser
 let lastTvRunDone = 0;         // downloads it achieved — drives the backoff below
 let lastTvRunStopped = false;  // ended by the catastrophic breaker
 setInterval(async () => {
+  broadcastStatus(true);   // keep dashboard tiles fresh even in quiet periods
   if (!cfg.schedule?.enabled || engine.running || miniRunning || prioritySet.size > 0) return;
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
