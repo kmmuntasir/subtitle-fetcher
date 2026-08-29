@@ -62,7 +62,10 @@ function pushEvent(e) {
 }
 
 const engine = {
-  running: false, stopRequested: false,
+  scanning: false, fetching: false, stopRequested: false,
+  // a scan (LAN read) and a fetch run (WAN requests) may run concurrently —
+  // their state mutations are already interleave-safe
+  get running() { return this.scanning || this.fetching; },
   lastResult: null, startedAt: null, phase: "idle",        // idle|scanning|fetching
   current: null,                                            // item being worked
   lastRunDate: state.lastRunDate ?? null,
@@ -105,8 +108,8 @@ const engine = {
   },
 
   async startScan() {
-    if (this.running) throw new Error("engine busy");
-    this.running = true; this.phase = "scanning"; this.stopRequested = false;
+    if (this.scanning) throw new Error("engine busy");
+    this.scanning = true; this.phase = "scanning"; this.stopRequested = false;
     pushEvent({ ev: "scan_start" });
     // yield so the HTTP response for POST /scan goes out before the heavy walk
     await new Promise(r => setTimeout(r, 30));
@@ -135,12 +138,13 @@ const engine = {
       console.error("[scan] failed:", e.message);
       pushEvent({ ev: "error", message: `scan failed: ${e.message}` });
     } finally {
-      this.running = false; this.phase = "idle"; this.current = null;
+      this.scanning = false; this.phase = this.fetching ? "fetching" : "idle";
+      if (!this.fetching) this.current = null;
     }
   },
   async startRun(limit = null, only = "", runOpts = {}) {
-    if (this.running || miniRunning) throw new Error("engine busy");
-    this.running = true; this.phase = "fetching"; this.stopRequested = false;
+    if (this.fetching || miniRunning) throw new Error("engine busy");
+    this.fetching = true; this.phase = "fetching"; this.stopRequested = false;
     this.startedAt = Date.now();
     openLog(LOG_DIR, "run");
     try {
@@ -161,11 +165,12 @@ const engine = {
       persist();
       return result;
     } finally {
-      this.running = false; this.phase = "idle"; this.current = null;
+      this.fetching = false; this.phase = this.scanning ? "scanning" : "idle";
+      if (!this.scanning) this.current = null;
       closeLog();
     }
   },
-  stop() { if (this.running) this.stopRequested = true; },
+  stop() { if (this.fetching) this.stopRequested = true; },
 };
 
 // ---- API implementation ------------------------------------------------------
@@ -633,14 +638,23 @@ let lastTvRunDone = 0;         // downloads it achieved — drives the backoff b
 let lastTvRunStopped = false;  // ended by the catastrophic breaker
 setInterval(async () => {
   broadcastStatus(true);   // keep dashboard tiles fresh even in quiet periods
-  if (!cfg.schedule?.enabled || engine.running || miniRunning || prioritySet.size > 0) return;
+  if (!cfg.schedule?.enabled || engine.fetching || miniRunning || prioritySet.size > 0) return;
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   const [hh, mm] = (cfg.schedule?.time ?? "13:05").split(":").map(Number);
   const due = now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
+  const stale = !state.scannedAt || Date.now() - state.scannedAt > 20 * 3600e3;
+
+  // stale inventory gets scanned first (one injection point) — scan and fetch
+  // may then run concurrently
+  if (stale && !engine.scanning) {
+    console.log("[scheduler] inventory stale — scanning first");
+    try { await engine.startScan(); } catch (e) { console.error("[scheduler] scan:", e.message); }
+    return;
+  }
 
   // ---- daily full run (all providers; movies ride SubDL's daily quota) ----
-  if (due && lastScheduledDay !== today) {
+  if (due && lastScheduledDay !== today && !stale) {
     lastScheduledDay = today;
     console.log(`[scheduler] daily run starting (${cfg.schedule.time})`);
     try { await engine.startRun(); } catch (e) { console.error("[scheduler]", e.message); }
@@ -651,17 +665,8 @@ setInterval(async () => {
   // a7 is uncapped but human-paced; sd stays out of these runs so its daily
   // quota is reserved for the movies at the scheduled slot. When a cycle
   // downloads nothing we back off 3 h — provider misses must not hot-cycle
-  // into parking.
+  // into parking. Runs concurrently with scans (LAN read vs WAN fetch).
   if (cfg.schedule?.tv247 === false) return;
-
-  // a stale inventory gets scanned first — tv247 runs skip rescanning by design
-  if (!state.scannedAt || Date.now() - state.scannedAt > 20 * 3600e3) {
-    console.log("[scheduler] inventory stale — scanning before tv247 cycle");
-    try { await engine.startScan(); } catch (e) { console.error("[scheduler] scan:", e.message); }
-    return;
-  }
-  // productive run → chain in 30 s; breaker-tripped run → it made progress
-  // (skipped items are marked), continue in 2 min; nothing left to do → 3 h
   const idleFor = Date.now() - lastTvRunEnd;
   if (idleFor < (lastTvRunDone > 0 ? 30e3 : lastTvRunStopped ? 2 * 60e3 : 3 * 3600e3)) return;
   lastTvRunEnd = Date.now();
