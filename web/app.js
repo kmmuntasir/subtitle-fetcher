@@ -174,7 +174,7 @@ function renderEvent(e) {
     case "quota": return `<span class="warn2">${esc(t)} Quota reached — ${esc(e.provider ?? e.detail ?? "")}</span>`;
     case "replace": return `<span class="dl">${esc(t)} Subtitle replaced — ${esc(e.key.split("/").pop())} → ${esc(e.release)}</span>`;
     case "priority": return `<span class="warn2">${esc(t)} Priority requested — ${esc(e.key.split("/").pop())}</span>`;
-    case "scan": return `<span class="warn2">${esc(t)} Scan complete — ${e.total ?? "?"} videos, ${e.pending ?? "?"} pending</span>`;
+    case "scan": return `<span class="warn2">${esc(t)} Scan complete — ${e.total ?? "?"} videos, ${e.pending ?? "?"} pending${e.renamed ? `, ${e.renamed} subtitles renamed` : ""}</span>`;
     case "scan_start": return `${esc(t)} Scan started — walking the library…`;
     case "scan_walk": {
       const segs = String(e.path ?? "").split(/[\\/]+/).filter(Boolean);

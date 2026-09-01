@@ -17,7 +17,7 @@ import { openSubtitlesHash } from "./lib/hash.mjs";
 import { runFetch, fetchPace } from "./lib/engine.mjs";
 import { buildProviders } from "./lib/providers/index.mjs";
 import { WebServer, newToken } from "./lib/webserver.mjs";
-import { reconstructPath, norm } from "./lib/utils.mjs";
+import { reconstructPath, norm, trueVideoPath } from "./lib/utils.mjs";
 
 const SCRIPT_DIR = path.dirname(path.resolve(fileURLToPath(import.meta.url)));
 const CONFIG_PATH = path.join(SCRIPT_DIR, "config.json");
@@ -133,7 +133,7 @@ const engine = {
       });
       persist();
       const s = summary(state);
-      pushEvent({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0 });
+      pushEvent({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0, renamed: r.renamed ?? 0 });
     } catch (e) {
       console.error("[scan] failed:", e.message);
       pushEvent({ ev: "error", message: `scan failed: ${e.message}` });
@@ -299,10 +299,10 @@ const api = {
     if (!prov) throw new Error("provider unavailable");
     const raw = cand.raw;
     raw.meta = listing.meta;
-    raw.videoBase = path.basename(reconstructPath(listing.key, rootPathsOf()));
+    const vPath = trueVideoPath(reconstructPath(listing.key, rootPathsOf()));
+    raw.videoBase = path.basename(vPath);
     const text = await prov.fetchCandidate({}, raw);
 
-    const vPath = reconstructPath(listing.key, rootPathsOf());
     const dest = `${vPath.replace(/\.[^.]+$/, "")}.en.srt`;
     const prev = fs.existsSync(dest) ? `${dest}.1` : null;
     if (prev) fs.renameSync(dest, prev);            // one-deep backup
