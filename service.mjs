@@ -133,7 +133,7 @@ const engine = {
       });
       persist();
       const s = summary(state);
-      pushEvent({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0, renamed: r.renamed ?? 0 });
+      pushEvent({ ev: "scan", ...s, total: r.total, errors: r.errors ?? 0, renamed: r.renamed ?? 0, credited: r.credited ?? 0 });
     } catch (e) {
       console.error("[scan] failed:", e.message);
       pushEvent({ ev: "error", message: `scan failed: ${e.message}` });
