@@ -363,15 +363,27 @@ addEventListener("keydown", (e) => { if (e.key === "Escape") $("#modal").hidden 
 
 // ---- library ----------------------------------------------------------------------
 let libMode = "tv";
-let libData = { tv: [], movies: [] };
+let libData = { tv: [], movies: [], at: 0 };
+const LIB_SUB_FILTERS = {
+  tv: [["", "All Shows"], ["full", "Subtitles: Full"], ["partial", "Subtitles: Partial"], ["zero", "Subtitles: Zero"]],
+  movie: [["", "All Movies"], ["yes", "Subtitles: Yes"], ["no", "Subtitles: No"], ["tried", "Tried But Not Found"]],
+};
 function initLibraryTabs() {
+  const fillSub = () => {
+    const key = libMode === "movie" ? "movie" : "tv";
+    $("#libSub").innerHTML = LIB_SUB_FILTERS[key].map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  };
   $$("#libTabs [data-lib]").forEach(b => b.addEventListener("click", () => {
     libMode = b.dataset.lib;
     $$("#libTabs [data-lib]").forEach(x => x.classList.toggle("active", x === b));
+    fillSub();
     renderLibrary().catch(e => toast("Library error: " + e.message));
   }));
+  $("#libSub").addEventListener("change", () =>
+    renderLibrary().catch(e => toast("Library error: " + e.message)));
   $("#libSearch").addEventListener("input", () =>
     renderLibrary().catch(e => toast("Library error: " + e.message)));
+  fillSub();
 }
 initLibraryTabs();
 
@@ -390,12 +402,26 @@ function artImg(key, title, cls = "art", kind = "movie") {
     onerror="if(!this.dataset.r){this.dataset.r='1';this.src=this.src.split('&_')[0]+'&_='+Date.now().toString(36)}else{this.outerHTML='<div class=&quot;${cls} noart&quot;>${esc(initials)}</div>'}">`;
 }
 
-async function loadLibrary() { renderLibrary().catch(e => toast("Library error: " + e.message)); }
+async function loadLibrary() {
+  // refresh cached coverage so the subtitle filters reflect reality
+  try {
+    if (!libData.at || Date.now() - libData.at > 60e3) {
+      const [tv, mov] = await Promise.all([api("library?type=tv"), api("library?type=movie")]);
+      libData.tv = tv.tv; libData.movies = mov.movies; libData.at = Date.now();
+    }
+  } catch { /* keep whatever cache we have */ }
+  await renderLibrary().catch(e => toast("Library error: " + e.message));
+}
 async function renderLibrary() {
   const q = $("#libSearch").value.trim().toLowerCase();
+  const sub = $("#libSub").value;
   if (libMode === "movie") {
-    if (!libData.movies.length) libData.movies = (await api("library?type=movie")).movies;
-    const list = q ? libData.movies.filter(m => (m.label ?? m.title ?? "").toLowerCase().includes(q)) : libData.movies;
+    if (!libData.movies.length) { libData.movies = (await api("library?type=movie")).movies; libData.at = Date.now(); }
+    const hasSub = (m) => m.status === "done" || m.status === "covered";
+    const matchSub = (m) => sub === "" || (sub === "yes" ? hasSub(m)
+      : sub === "no" ? m.status === "pending"
+      : (m.status === "failed" || m.status === "parked"));
+    const list = libData.movies.filter(m => matchSub(m) && (!q || (m.label ?? m.title ?? "").toLowerCase().includes(q)));
     $("#libShows").hidden = true; $("#libMovies").hidden = false;
     $("#libMovies").innerHTML = list.slice(0, 500).map(m => `
       <div class="pcard" data-k="${esc(m.key)}">
@@ -406,8 +432,10 @@ async function renderLibrary() {
     bindCardClicks();
     return;
   }
-  if (!libData.tv.length) libData.tv = (await api("library?type=tv")).tv;
-  const list = q ? libData.tv.filter(x => (x.label ?? x.show).toLowerCase().includes(q)) : libData.tv;
+  if (!libData.tv.length) { libData.tv = (await api("library?type=tv")).tv; libData.at = Date.now(); }
+  const matchSub = (sh) => sub === "" || (sub === "full" ? sh.total > 0 && sh.covered === sh.total
+    : sub === "partial" ? sh.covered > 0 && sh.covered < sh.total : sh.covered === 0);
+  const list = libData.tv.filter(x => matchSub(x) && (!q || (x.label ?? x.show).toLowerCase().includes(q)));
   $("#libMovies").hidden = true; $("#libShows").hidden = false;
   $("#libShows").className = "cards";
   $("#libShows").innerHTML = list.slice(0, 400).map(sh => {
