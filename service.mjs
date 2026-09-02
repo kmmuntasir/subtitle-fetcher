@@ -711,7 +711,7 @@ setInterval(async () => {
   lastTvRunEnd = Date.now();
   console.log("[scheduler] tv247: starting addic7ed-only TV run");
   try {
-    const r = await engine.startRun(null, "/tv series/", { skipRescan: true, providers: ["a7"], skipA7MissedToday: true });
+    const r = await engine.startRun(null, "/tv series/", { skipRescan: true, providers: ["a7"], skipA7MissedToday: true, noPark: true });
     lastTvRunDone = r?.done ?? 0;
     lastTvRunStopped = !!r?.stopped;
   } catch (e) {
