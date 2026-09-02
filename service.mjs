@@ -145,6 +145,7 @@ const engine = {
   async startRun(limit = null, only = "", runOpts = {}) {
     if (this.fetching || miniRunning) throw new Error("engine busy");
     this.fetching = true; this.phase = "fetching"; this.stopRequested = false;
+    this.runKind = runOpts.kind ?? "manual";
     this.startedAt = Date.now();
     openLog(LOG_DIR, "run");
     try {
@@ -671,7 +672,7 @@ function saveOmdbCacheDebounced() {
 }
 
 // ---- scheduler loop ------------------------------------------------------------
-let lastScheduledDay = state.lastRunDate ?? null;
+let lastScheduledDay = state.lastDailyDate ?? null;   // only the DAILY full run marks this — tv247/minis must not
 let lastTvRunEnd = 0;          // when the last tv247 run finished (or was reserved)
 let lastTvRunDone = 0;         // downloads it achieved — drives the backoff below
 let lastTvRunStopped = false;  // ended by the catastrophic breaker
@@ -694,7 +695,12 @@ setInterval(async () => {
 
   // ---- daily full run (all providers; movies ride SubDL's daily quota) ----
   if (due && lastScheduledDay !== today && !stale) {
+    // a running tv247 cycle politely yields the slot — its quota-free work
+    // can resume any time, but SubDL's allowance resets daily
+    if (engine.fetching && engine.runKind === "tv247") { engine.stop(); return; }
+    if (engine.fetching || miniRunning || prioritySet.size > 0) return;
     lastScheduledDay = today;
+    state.lastDailyDate = today;      // only the daily full run marks this
     console.log(`[scheduler] daily run starting (${cfg.schedule.time})`);
     try { await engine.startRun(); } catch (e) { console.error("[scheduler]", e.message); }
     return;
@@ -711,7 +717,7 @@ setInterval(async () => {
   lastTvRunEnd = Date.now();
   console.log("[scheduler] tv247: starting addic7ed-only TV run");
   try {
-    const r = await engine.startRun(null, "/tv series/", { skipRescan: true, providers: ["a7"], skipA7MissedToday: true, noPark: true });
+    const r = await engine.startRun(null, "/tv series/", { kind: "tv247", skipRescan: true, providers: ["a7"], skipA7MissedToday: true, noPark: true });
     lastTvRunDone = r?.done ?? 0;
     lastTvRunStopped = !!r?.stopped;
   } catch (e) {
